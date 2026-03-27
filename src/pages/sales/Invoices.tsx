@@ -1,0 +1,1136 @@
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Search, CreditCard, FileText, Download, Printer, Pencil, Trash2, Eye } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
+import { formatCurrency, formatDate, formatDateInput, generateId, exportToCSV } from '../../lib/utils';
+import Modal from '../../components/ui/Modal';
+import StatusBadge from '../../components/ui/StatusBadge';
+import EmptyState from '../../components/ui/EmptyState';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import InvoicePrint from './InvoicePrint';
+import { useDateRange } from '../../contexts/DateRangeContext';
+import type { Invoice, Product, Customer, SalesOrder } from '../../types';
+
+interface LineItem {
+  product_id: string;
+  product_name: string;
+  description: string;
+  unit: string;
+  quantity: string;
+  unit_price: string;
+  discount_pct: string;
+  tax_pct: string;
+  total_price: number;
+}
+
+export default function Invoices() {
+  const { dateRange } = useDateRange();
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [showSOSelectModal, setShowSOSelectModal] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [showPrint, setShowPrint] = useState(false);
+  const [showPayModal, setShowPayModal] = useState(false);
+  const [showViewModal, setShowViewModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [viewItems, setViewItems] = useState<LineItem[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [availableSOs, setAvailableSOs] = useState<SalesOrder[]>([]);
+  const [soSearch, setSoSearch] = useState('');
+  const [selectedSO, setSelectedSO] = useState<SalesOrder | null>(null);
+  const [selectedSOId, setSelectedSOId] = useState('');
+  const printRef = useRef<HTMLDivElement>(null);
+
+  const [form, setForm] = useState({
+    customer_id: '', customer_name: '', customer_phone: '',
+    customer_address: '', customer_address2: '',
+    customer_city: '', customer_state: '', customer_pincode: '',
+    invoice_date: new Date().toISOString().split('T')[0], due_date: '',
+    courier_charges: '0', discount_amount: '0',
+    payment_terms: 'Due on receipt', notes: '',
+    bank_name: '', account_number: '', ifsc_code: '',
+    sales_order_id: '',
+  });
+  const [items, setItems] = useState<LineItem[]>([{
+    product_id: '', product_name: '', description: '', unit: 'pcs',
+    quantity: '1', unit_price: '', discount_pct: '0', tax_pct: '0', total_price: 0,
+  }]);
+  const [editForm, setEditForm] = useState({
+    invoice_date: '', due_date: '', courier_charges: '0', discount_amount: '0',
+    payment_terms: '', notes: '', bank_name: '', account_number: '', ifsc_code: '',
+  });
+  const [editItems, setEditItems] = useState<LineItem[]>([]);
+  const [payForm, setPayForm] = useState({ amount: '', payment_mode: 'Cash', reference_number: '', payment_date: new Date().toISOString().split('T')[0] });
+
+  useEffect(() => { loadData(); }, []);
+
+  const loadData = async () => {
+    const [invRes, productsRes, customersRes] = await Promise.all([
+      supabase.from('invoices').select('*').order('created_at', { ascending: false }),
+      supabase.from('products').select('id, name, unit, selling_price').eq('is_active', true),
+      supabase.from('customers').select('id, name, phone, alt_phone, address, address2, city, state, pincode').eq('is_active', true).order('name'),
+    ]);
+    setInvoices(invRes.data || []);
+    setProducts(productsRes.data || []);
+    setCustomers(customersRes.data || []);
+  };
+
+  const loadAvailableSOs = async () => {
+    const { data: invoicedSOIds } = await supabase
+      .from('invoices')
+      .select('sales_order_id')
+      .not('sales_order_id', 'is', null);
+
+    const usedIds = (invoicedSOIds || []).map((r: { sales_order_id: string }) => r.sales_order_id).filter(Boolean);
+
+    let query = supabase
+      .from('sales_orders')
+      .select('*, items:sales_order_items(*)')
+      .in('status', ['confirmed', 'delivered'])
+      .order('created_at', { ascending: false });
+
+    if (usedIds.length > 0) {
+      query = query.not('id', 'in', `(${usedIds.join(',')})`);
+    }
+
+    const { data } = await query;
+    setAvailableSOs(data || []);
+  };
+
+  const openSOSelectModal = async () => {
+    await loadAvailableSOs();
+    setSoSearch('');
+    setSelectedSOId('');
+    setSelectedSO(null);
+    setShowSOSelectModal(true);
+  };
+
+  const handleSOSelect = (soId: string) => {
+    setSelectedSOId(soId);
+    const so = availableSOs.find(s => s.id === soId) || null;
+    setSelectedSO(so);
+  };
+
+  const handleProceedWithSO = async () => {
+    if (!selectedSO) return;
+
+    let soItems: SalesOrder['items'] = selectedSO.items;
+    if (!soItems || soItems.length === 0) {
+      const { data: itemsData } = await supabase
+        .from('sales_order_items')
+        .select('*')
+        .eq('sales_order_id', selectedSO.id);
+      soItems = itemsData || [];
+    }
+
+    const soCustomer = customers.find(c => c.id === selectedSO.customer_id);
+    setForm({
+      customer_id: selectedSO.customer_id || '',
+      customer_name: selectedSO.customer_name,
+      customer_phone: selectedSO.customer_phone || soCustomer?.phone || '',
+      customer_address: selectedSO.customer_address || soCustomer?.address || '',
+      customer_address2: selectedSO.customer_address2 || soCustomer?.address2 || '',
+      customer_city: selectedSO.customer_city || soCustomer?.city || '',
+      customer_state: selectedSO.customer_state || soCustomer?.state || '',
+      customer_pincode: selectedSO.customer_pincode || soCustomer?.pincode || '',
+      invoice_date: new Date().toISOString().split('T')[0],
+      due_date: '',
+      courier_charges: String(selectedSO.courier_charges || 0),
+      discount_amount: String(selectedSO.discount_amount || 0),
+      payment_terms: 'Due on receipt',
+      notes: selectedSO.notes || '',
+      bank_name: '',
+      account_number: '',
+      ifsc_code: '',
+      sales_order_id: selectedSO.id,
+    });
+
+    setItems(
+      (soItems || []).map(item => ({
+        product_id: item.product_id || '',
+        product_name: item.product_name,
+        description: '',
+        unit: item.unit,
+        quantity: String(item.quantity),
+        unit_price: String(item.unit_price),
+        discount_pct: String(item.discount_pct || 0),
+        tax_pct: '0',
+        total_price: item.total_price,
+      }))
+    );
+
+    setShowSOSelectModal(false);
+    setShowModal(true);
+  };
+
+  const addItem = () => setItems(prev => [...prev, { product_id: '', product_name: '', description: '', unit: 'pcs', quantity: '1', unit_price: '', discount_pct: '0', tax_pct: '0', total_price: 0 }]);
+  const removeItem = (i: number) => setItems(prev => prev.filter((_, idx) => idx !== i));
+
+  const updateItem = (i: number, field: string, value: string) => {
+    setItems(prev => {
+      const next = [...prev];
+      next[i] = { ...next[i], [field]: value };
+      if (field === 'product_id') {
+        const p = products.find(p => p.id === value);
+        if (p) { next[i].product_name = p.name; next[i].unit = p.unit; next[i].unit_price = String(p.selling_price); }
+      }
+      const qty = parseFloat(next[i].quantity) || 0;
+      const price = parseFloat(next[i].unit_price) || 0;
+      const disc = parseFloat(next[i].discount_pct) || 0;
+      const tax = parseFloat(next[i].tax_pct) || 0;
+      const afterDisc = qty * price * (1 - disc / 100);
+      next[i].total_price = afterDisc * (1 + tax / 100);
+      return next;
+    });
+  };
+
+  const addEditItem = () => setEditItems(prev => [...prev, { product_id: '', product_name: '', description: '', unit: 'pcs', quantity: '1', unit_price: '', discount_pct: '0', tax_pct: '0', total_price: 0 }]);
+  const removeEditItem = (i: number) => setEditItems(prev => prev.filter((_, idx) => idx !== i));
+
+  const updateEditItem = (i: number, field: string, value: string) => {
+    setEditItems(prev => {
+      const next = [...prev];
+      next[i] = { ...next[i], [field]: value };
+      if (field === 'product_id') {
+        const p = products.find(p => p.id === value);
+        if (p) { next[i].product_name = p.name; next[i].unit = p.unit; next[i].unit_price = String(p.selling_price); }
+      }
+      const qty = parseFloat(next[i].quantity) || 0;
+      const price = parseFloat(next[i].unit_price) || 0;
+      const disc = parseFloat(next[i].discount_pct) || 0;
+      const tax = parseFloat(next[i].tax_pct) || 0;
+      const afterDisc = qty * price * (1 - disc / 100);
+      next[i].total_price = afterDisc * (1 + tax / 100);
+      return next;
+    });
+  };
+
+  const subtotal = items.reduce((s, i) => s + i.total_price, 0);
+  const taxAmount = items.reduce((s, i) => {
+    const base = (parseFloat(i.quantity) || 0) * (parseFloat(i.unit_price) || 0) * (1 - (parseFloat(i.discount_pct) || 0) / 100);
+    return s + base * ((parseFloat(i.tax_pct) || 0) / 100);
+  }, 0);
+  const total = subtotal + (parseFloat(form.courier_charges) || 0) - (parseFloat(form.discount_amount) || 0);
+
+  const editSubtotal = editItems.reduce((s, i) => s + i.total_price, 0);
+  const editTaxAmount = editItems.reduce((s, i) => {
+    const base = (parseFloat(i.quantity) || 0) * (parseFloat(i.unit_price) || 0) * (1 - (parseFloat(i.discount_pct) || 0) / 100);
+    return s + base * ((parseFloat(i.tax_pct) || 0) / 100);
+  }, 0);
+  const editTotal = editSubtotal + (parseFloat(editForm.courier_charges) || 0) - (parseFloat(editForm.discount_amount) || 0);
+
+  const handleSave = async () => {
+    const invNumber = generateId('INV');
+    const { data: inv } = await supabase.from('invoices').insert({
+      invoice_number: invNumber,
+      sales_order_id: form.sales_order_id || null,
+      customer_id: form.customer_id || null,
+      customer_name: form.customer_name,
+      customer_phone: form.customer_phone,
+      customer_address: form.customer_address,
+      customer_address2: form.customer_address2,
+      customer_city: form.customer_city,
+      customer_state: form.customer_state,
+      customer_pincode: form.customer_pincode,
+      invoice_date: form.invoice_date,
+      due_date: form.due_date || null,
+      status: 'sent',
+      subtotal,
+      tax_amount: taxAmount,
+      courier_charges: parseFloat(form.courier_charges) || 0,
+      discount_amount: parseFloat(form.discount_amount) || 0,
+      total_amount: total,
+      paid_amount: 0,
+      outstanding_amount: total,
+      payment_terms: form.payment_terms,
+      notes: form.notes,
+      bank_name: form.bank_name,
+      account_number: form.account_number,
+      ifsc_code: form.ifsc_code,
+    }).select().single();
+
+    if (inv) {
+      const validItems = items.filter(i => i.product_name);
+
+      await supabase.from('invoice_items').insert(
+        validItems.map(i => ({
+          invoice_id: inv.id,
+          product_id: i.product_id || null,
+          product_name: i.product_name,
+          description: i.description,
+          unit: i.unit,
+          quantity: parseFloat(i.quantity) || 0,
+          unit_price: parseFloat(i.unit_price) || 0,
+          discount_pct: parseFloat(i.discount_pct) || 0,
+          tax_pct: parseFloat(i.tax_pct) || 0,
+          total_price: i.total_price,
+        }))
+      );
+
+      for (const item of validItems) {
+        if (item.product_id) {
+          const qty = parseFloat(item.quantity) || 0;
+          await supabase.from('stock_movements').insert({
+            product_id: item.product_id,
+            movement_type: 'out',
+            quantity: qty,
+            reference_type: 'invoice',
+            reference_id: inv.id,
+            notes: 'Invoice ' + invNumber,
+          });
+          const { data: prod } = await supabase
+            .from('products')
+            .select('stock_quantity')
+            .eq('id', item.product_id)
+            .maybeSingle();
+          if (prod) {
+            await supabase
+              .from('products')
+              .update({ stock_quantity: (prod.stock_quantity || 0) - qty })
+              .eq('id', item.product_id);
+          }
+        }
+      }
+
+      await supabase.from('ledger_entries').insert({
+        entry_date: form.invoice_date,
+        entry_type: 'debit',
+        account_type: 'customer',
+        party_id: form.customer_id || null,
+        party_name: form.customer_name,
+        reference_type: 'invoice',
+        reference_id: inv.id,
+        description: 'Invoice ' + invNumber,
+        amount: total,
+      });
+
+      if (form.customer_id) {
+        const { data: cust } = await supabase.from('customers').select('balance, total_revenue').eq('id', form.customer_id).maybeSingle();
+        if (cust) {
+          await supabase.from('customers').update({
+            balance: (cust.balance || 0) + total,
+            total_revenue: (cust.total_revenue || 0) + total,
+            last_interaction: new Date().toISOString(),
+          }).eq('id', form.customer_id);
+        }
+      }
+
+      if (form.sales_order_id) {
+        await supabase
+          .from('sales_orders')
+          .update({ status: 'dispatched' })
+          .eq('id', form.sales_order_id);
+      }
+    }
+
+    setShowModal(false);
+    loadData();
+  };
+
+  const openView = async (inv: Invoice) => {
+    const { data: itemsData } = await supabase.from('invoice_items').select('*').eq('invoice_id', inv.id);
+    setViewItems((itemsData || []).map(i => ({
+      product_id: i.product_id || '',
+      product_name: i.product_name,
+      description: i.description || '',
+      unit: i.unit,
+      quantity: String(i.quantity),
+      unit_price: String(i.unit_price),
+      discount_pct: String(i.discount_pct),
+      tax_pct: String(i.tax_pct),
+      total_price: i.total_price,
+    })));
+    setSelectedInvoice(inv);
+    setShowViewModal(true);
+  };
+
+  const openEdit = async (inv: Invoice) => {
+    const { data: itemsData } = await supabase.from('invoice_items').select('*').eq('invoice_id', inv.id);
+    setEditForm({
+      invoice_date: formatDateInput(inv.invoice_date),
+      due_date: inv.due_date ? formatDateInput(inv.due_date) : '',
+      courier_charges: String(inv.courier_charges || 0),
+      discount_amount: String(inv.discount_amount || 0),
+      payment_terms: inv.payment_terms || '',
+      notes: inv.notes || '',
+      bank_name: inv.bank_name || '',
+      account_number: inv.account_number || '',
+      ifsc_code: inv.ifsc_code || '',
+    });
+    setEditItems((itemsData || []).map(i => ({
+      product_id: i.product_id || '',
+      product_name: i.product_name,
+      description: i.description || '',
+      unit: i.unit,
+      quantity: String(i.quantity),
+      unit_price: String(i.unit_price),
+      discount_pct: String(i.discount_pct),
+      tax_pct: String(i.tax_pct),
+      total_price: i.total_price,
+    })));
+    setSelectedInvoice(inv);
+    setShowEditModal(true);
+  };
+
+  const handleEditSave = async () => {
+    if (!selectedInvoice) return;
+    await supabase.from('invoices').update({
+      invoice_date: editForm.invoice_date,
+      due_date: editForm.due_date || null,
+      courier_charges: parseFloat(editForm.courier_charges) || 0,
+      discount_amount: parseFloat(editForm.discount_amount) || 0,
+      subtotal: editSubtotal,
+      tax_amount: editTaxAmount,
+      total_amount: editTotal,
+      outstanding_amount: Math.max(0, editTotal - selectedInvoice.paid_amount),
+      payment_terms: editForm.payment_terms,
+      notes: editForm.notes,
+      bank_name: editForm.bank_name,
+      account_number: editForm.account_number,
+      ifsc_code: editForm.ifsc_code,
+    }).eq('id', selectedInvoice.id);
+
+    await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
+    await supabase.from('invoice_items').insert(
+      editItems.filter(i => i.product_name).map(i => ({
+        invoice_id: selectedInvoice.id,
+        product_id: i.product_id || null,
+        product_name: i.product_name,
+        description: i.description,
+        unit: i.unit,
+        quantity: parseFloat(i.quantity) || 0,
+        unit_price: parseFloat(i.unit_price) || 0,
+        discount_pct: parseFloat(i.discount_pct) || 0,
+        tax_pct: parseFloat(i.tax_pct) || 0,
+        total_price: i.total_price,
+      }))
+    );
+
+    setShowEditModal(false);
+    loadData();
+  };
+
+  const openDelete = (inv: Invoice) => {
+    setSelectedInvoice(inv);
+    setShowDeleteConfirm(true);
+  };
+
+  const handleDelete = async () => {
+    if (!selectedInvoice) return;
+    await supabase.from('invoices').update({ status: 'cancelled' }).eq('id', selectedInvoice.id);
+    loadData();
+  };
+
+  const openPrint = async (inv: Invoice) => {
+    const { data: itemsData } = await supabase.from('invoice_items').select('*').eq('invoice_id', inv.id);
+    setSelectedInvoice({ ...inv, items: itemsData || [] });
+    setShowPrint(true);
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const openPayment = (inv: Invoice) => {
+    setSelectedInvoice(inv);
+    setPayForm({ amount: String(inv.outstanding_amount), payment_mode: 'Cash', reference_number: '', payment_date: new Date().toISOString().split('T')[0] });
+    setShowPayModal(true);
+  };
+
+  const handlePayment = async () => {
+    if (!selectedInvoice) return;
+    const amount = parseFloat(payForm.amount) || 0;
+    const newPaid = selectedInvoice.paid_amount + amount;
+    const newOutstanding = Math.max(0, selectedInvoice.total_amount - newPaid);
+    const newStatus = newOutstanding <= 0 ? 'paid' : 'partial';
+
+    await supabase.from('invoices').update({
+      paid_amount: newPaid, outstanding_amount: newOutstanding, status: newStatus,
+    }).eq('id', selectedInvoice.id);
+
+    const { data: payment } = await supabase.from('payments').insert({
+      payment_number: generateId('PAY'),
+      payment_type: 'receipt',
+      reference_type: 'invoice',
+      reference_id: selectedInvoice.id,
+      customer_id: selectedInvoice.customer_id || null,
+      party_name: selectedInvoice.customer_name,
+      payment_date: payForm.payment_date,
+      amount,
+      payment_mode: payForm.payment_mode,
+      reference_number: payForm.reference_number,
+    }).select().single();
+
+    if (payment) {
+      await supabase.from('ledger_entries').insert({
+        entry_date: payForm.payment_date,
+        entry_type: 'credit',
+        account_type: 'customer',
+        party_id: selectedInvoice.customer_id || null,
+        party_name: selectedInvoice.customer_name,
+        reference_type: 'payment',
+        reference_id: payment.id,
+        description: 'Payment against ' + selectedInvoice.invoice_number,
+        amount,
+      });
+    }
+
+    if (selectedInvoice.customer_id) {
+      const { data: cust } = await supabase.from('customers').select('balance').eq('id', selectedInvoice.customer_id).maybeSingle();
+      if (cust) {
+        await supabase.from('customers').update({
+          balance: Math.max(0, (cust.balance || 0) - amount),
+        }).eq('id', selectedInvoice.customer_id);
+      }
+    }
+
+    setShowPayModal(false);
+    loadData();
+  };
+
+  const handleExportCSV = () => {
+    exportToCSV(
+      filtered.map(inv => ({
+        'Invoice #': inv.invoice_number,
+        'Customer': inv.customer_name,
+        'Phone': inv.customer_phone || '',
+        'Invoice Date': inv.invoice_date,
+        'Due Date': inv.due_date || '',
+        'Subtotal': inv.subtotal,
+        'Tax Amount': inv.tax_amount,
+        'Courier Charges': inv.courier_charges || 0,
+        'Discount': inv.discount_amount || 0,
+        'Total Amount': inv.total_amount,
+        'Paid Amount': inv.paid_amount,
+        'Outstanding': inv.outstanding_amount,
+        'Status': inv.status,
+        'Payment Terms': inv.payment_terms || '',
+        'Notes': inv.notes || '',
+      })),
+      'invoices'
+    );
+  };
+
+  const filtered = invoices.filter(i => {
+    const matchSearch = i.customer_name.toLowerCase().includes(search.toLowerCase()) || i.invoice_number.toLowerCase().includes(search.toLowerCase());
+    const matchStatus = statusFilter === 'All' || i.status === statusFilter.toLowerCase();
+    const matchDate = i.invoice_date >= dateRange.from && i.invoice_date <= dateRange.to;
+    return matchSearch && matchStatus && matchDate;
+  });
+
+  const totalOutstanding = invoices.reduce((s, i) => s + (i.outstanding_amount || 0), 0);
+  const paidThisMonth = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.total_amount, 0);
+
+  const STATUSES = ['All', 'Draft', 'Sent', 'Partial', 'Paid', 'Overdue', 'Cancelled'];
+
+  const filteredSOs = availableSOs.filter(so =>
+    so.customer_name.toLowerCase().includes(soSearch.toLowerCase()) ||
+    so.so_number.toLowerCase().includes(soSearch.toLowerCase())
+  );
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-neutral-50">
+      <div className="bg-white border-b border-neutral-100 px-6 py-4 flex items-center justify-between no-print">
+        <div>
+          <h1 className="text-xl font-bold text-neutral-900">Invoices</h1>
+          <p className="text-xs text-neutral-500 mt-0.5">Create and manage customer invoices</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search invoices..." className="input pl-8 w-52 text-xs" />
+          </div>
+          <button onClick={handleExportCSV} className="btn-secondary">
+            <Download className="w-4 h-4" /> Export CSV
+          </button>
+          <button onClick={openSOSelectModal} className="btn-primary">
+            <Plus className="w-4 h-4" /> New Invoice
+          </button>
+        </div>
+      </div>
+
+      <div className="p-6 space-y-4 no-print">
+        <div className="grid grid-cols-4 gap-4">
+          <div className="card">
+            <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Total Invoices</p>
+            <p className="text-2xl font-bold text-neutral-900 mt-1">{invoices.length}</p>
+          </div>
+          <div className="card">
+            <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Outstanding</p>
+            <p className="text-2xl font-bold text-error-600 mt-1">{formatCurrency(totalOutstanding)}</p>
+          </div>
+          <div className="card">
+            <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Paid (All Time)</p>
+            <p className="text-2xl font-bold text-success-600 mt-1">{formatCurrency(paidThisMonth)}</p>
+          </div>
+          <div className="card">
+            <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Overdue</p>
+            <p className="text-2xl font-bold text-warning-600 mt-1">{invoices.filter(i => i.status === 'overdue').length}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {STATUSES.map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${statusFilter === s ? 'bg-primary-600 text-white' : 'bg-white border border-neutral-200 text-neutral-600 hover:bg-neutral-50'}`}>
+              {s}
+            </button>
+          ))}
+        </div>
+
+        <div className="card p-0 overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-neutral-50 border-b border-neutral-100">
+              <tr>
+                <th className="table-header text-left">Invoice #</th>
+                <th className="table-header text-left">Customer</th>
+                <th className="table-header text-left">Date</th>
+                <th className="table-header text-left">Due</th>
+                <th className="table-header text-right">Amount</th>
+                <th className="table-header text-right">Outstanding</th>
+                <th className="table-header text-left">Status</th>
+                <th className="table-header text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(inv => (
+                <tr key={inv.id} className="border-b border-neutral-50 hover:bg-neutral-50 transition-colors">
+                  <td className="table-cell font-medium text-primary-700">{inv.invoice_number}</td>
+                  <td className="table-cell">
+                    <p className="font-medium">{inv.customer_name}</p>
+                    <p className="text-xs text-neutral-400">{inv.customer_phone}</p>
+                  </td>
+                  <td className="table-cell text-neutral-500">{formatDate(inv.invoice_date)}</td>
+                  <td className="table-cell text-neutral-500">{inv.due_date ? formatDate(inv.due_date) : '-'}</td>
+                  <td className="table-cell text-right font-semibold">{formatCurrency(inv.total_amount)}</td>
+                  <td className="table-cell text-right">
+                    {inv.outstanding_amount > 0 ? (
+                      <span className="text-error-600 font-medium">{formatCurrency(inv.outstanding_amount)}</span>
+                    ) : <span className="text-success-600 font-medium">Paid</span>}
+                  </td>
+                  <td className="table-cell"><StatusBadge status={inv.status} /></td>
+                  <td className="table-cell text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      {inv.outstanding_amount > 0 && inv.status !== 'cancelled' && (
+                        <button onClick={() => openPayment(inv)} title="Record Payment"
+                          className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-primary-50 text-primary-600 transition-colors">
+                          <CreditCard className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <button onClick={() => openView(inv)} title="View"
+                        className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-neutral-100 text-neutral-500 transition-colors">
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => openPrint(inv)} title="Print / PDF"
+                        className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-neutral-100 text-neutral-500 transition-colors">
+                        <Printer className="w-3.5 h-3.5" />
+                      </button>
+                      {inv.status !== 'paid' && inv.status !== 'cancelled' && (
+                        <button onClick={() => openEdit(inv)} title="Edit"
+                          className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-neutral-100 text-neutral-500 transition-colors">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {inv.status !== 'paid' && inv.status !== 'cancelled' && (
+                        <button onClick={() => openDelete(inv)} title="Cancel Invoice"
+                          className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-50 text-red-500 transition-colors">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filtered.length === 0 && <EmptyState icon={FileText} title="No invoices found" description="Select a Sales Order to create an invoice." />}
+        </div>
+      </div>
+
+      <Modal isOpen={showSOSelectModal} onClose={() => setShowSOSelectModal(false)} title="Select Sales Order" size="lg"
+        footer={
+          <>
+            <button onClick={() => setShowSOSelectModal(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleProceedWithSO} disabled={!selectedSOId} className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed">Continue to Invoice</button>
+          </>
+        }>
+        <div className="space-y-3">
+          <p className="text-sm text-neutral-500">An invoice must be linked to a Sales Order. Select a confirmed or delivered Sales Order below.</p>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+            <input
+              value={soSearch}
+              onChange={e => setSoSearch(e.target.value)}
+              placeholder="Search by SO number or customer..."
+              className="input pl-8 w-full text-xs"
+            />
+          </div>
+          {filteredSOs.length === 0 ? (
+            <div className="text-center py-8 text-neutral-400 text-sm">
+              No eligible Sales Orders found. Only confirmed or delivered SOs without an existing invoice are shown.
+            </div>
+          ) : (
+            <div className="border border-neutral-200 rounded-lg overflow-hidden max-h-80 overflow-y-auto">
+              {filteredSOs.map(so => (
+                <div
+                  key={so.id}
+                  onClick={() => handleSOSelect(so.id)}
+                  className={`flex items-center justify-between px-4 py-3 cursor-pointer border-b border-neutral-100 last:border-0 transition-colors ${selectedSOId === so.id ? 'bg-primary-50 border-primary-100' : 'hover:bg-neutral-50'}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${selectedSOId === so.id ? 'border-primary-600 bg-primary-600' : 'border-neutral-300'}`}>
+                      {selectedSOId === so.id && <div className="w-2 h-2 rounded-full bg-white" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-primary-700">{so.so_number}</p>
+                      <p className="text-xs text-neutral-500">{so.customer_name}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-semibold">{formatCurrency(so.total_amount)}</p>
+                    <p className="text-xs text-neutral-400">{formatDate(so.so_date)} &middot; <StatusBadge status={so.status} /></p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      <Modal isOpen={showViewModal} onClose={() => setShowViewModal(false)} title="Invoice Details" size="2xl"
+        footer={
+          <div className="flex gap-2">
+            <button onClick={() => { setShowViewModal(false); if (selectedInvoice) openPrint(selectedInvoice); }} className="btn-secondary">Print</button>
+            <button onClick={() => setShowViewModal(false)} className="btn-primary">Close</button>
+          </div>
+        }>
+        {selectedInvoice && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <p className="label">Invoice #</p>
+                <p className="text-sm font-semibold text-primary-700">{selectedInvoice.invoice_number}</p>
+              </div>
+              <div>
+                <p className="label">Status</p>
+                <StatusBadge status={selectedInvoice.status} />
+              </div>
+              <div>
+                <p className="label">Customer</p>
+                <p className="text-sm font-medium">{selectedInvoice.customer_name}</p>
+                {selectedInvoice.customer_phone && <p className="text-xs text-neutral-500">{selectedInvoice.customer_phone}</p>}
+              </div>
+              <div>
+                <p className="label">Invoice Date</p>
+                <p className="text-sm">{formatDate(selectedInvoice.invoice_date)}</p>
+              </div>
+              <div>
+                <p className="label">Due Date</p>
+                <p className="text-sm">{selectedInvoice.due_date ? formatDate(selectedInvoice.due_date) : '-'}</p>
+              </div>
+              <div>
+                <p className="label">Payment Terms</p>
+                <p className="text-sm">{selectedInvoice.payment_terms || '-'}</p>
+              </div>
+              {selectedInvoice.customer_address && (
+                <div className="col-span-2">
+                  <p className="label">Address</p>
+                  <p className="text-sm">{selectedInvoice.customer_address}{selectedInvoice.customer_city ? `, ${selectedInvoice.customer_city}` : ''}</p>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <p className="text-sm font-semibold text-neutral-700 mb-2">Line Items</p>
+              <div className="border border-neutral-200 rounded-lg overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-neutral-50">
+                    <tr>
+                      <th className="table-header text-left">Product / Description</th>
+                      <th className="table-header text-right w-16">Qty</th>
+                      <th className="table-header text-right w-24">Rate</th>
+                      <th className="table-header text-right w-16">Disc%</th>
+                      <th className="table-header text-right w-16">Tax%</th>
+                      <th className="table-header text-right w-24">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {viewItems.map((item, i) => (
+                      <tr key={i} className="border-t border-neutral-100">
+                        <td className="px-3 py-2">
+                          <p className="text-sm font-medium">{item.product_name}</p>
+                          {item.description && <p className="text-xs text-neutral-500">{item.description}</p>}
+                        </td>
+                        <td className="px-2 py-2 text-right text-sm">{item.quantity} {item.unit}</td>
+                        <td className="px-2 py-2 text-right text-sm">{formatCurrency(parseFloat(item.unit_price) || 0)}</td>
+                        <td className="px-2 py-2 text-right text-sm">{item.discount_pct}%</td>
+                        <td className="px-2 py-2 text-right text-sm">{item.tax_pct}%</td>
+                        <td className="px-2 py-2 text-right text-sm font-semibold">{formatCurrency(item.total_price)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex justify-end mt-2 gap-4 text-sm pr-2">
+                <div className="space-y-1 text-right">
+                  <div className="flex gap-8 justify-between text-neutral-600"><span>Subtotal</span><span className="font-medium">{formatCurrency(selectedInvoice.subtotal)}</span></div>
+                  <div className="flex gap-8 justify-between text-neutral-600"><span>Tax</span><span className="font-medium">{formatCurrency(selectedInvoice.tax_amount)}</span></div>
+                  {(selectedInvoice.courier_charges || 0) > 0 && <div className="flex gap-8 justify-between text-neutral-600"><span>Courier</span><span className="font-medium">{formatCurrency(selectedInvoice.courier_charges)}</span></div>}
+                  {(selectedInvoice.discount_amount || 0) > 0 && <div className="flex gap-8 justify-between text-neutral-600"><span>Discount</span><span className="font-medium text-success-600">-{formatCurrency(selectedInvoice.discount_amount)}</span></div>}
+                  <div className="flex gap-8 justify-between font-bold text-neutral-900 border-t border-neutral-200 pt-1"><span>Total</span><span>{formatCurrency(selectedInvoice.total_amount)}</span></div>
+                  <div className="flex gap-8 justify-between text-success-600"><span>Paid</span><span className="font-medium">{formatCurrency(selectedInvoice.paid_amount)}</span></div>
+                  <div className="flex gap-8 justify-between text-error-600 font-bold"><span>Outstanding</span><span>{formatCurrency(selectedInvoice.outstanding_amount)}</span></div>
+                </div>
+              </div>
+            </div>
+
+            {(selectedInvoice.bank_name || selectedInvoice.account_number) && (
+              <div className="p-3 bg-neutral-50 rounded-lg grid grid-cols-3 gap-3">
+                <p className="col-span-3 text-xs font-semibold text-neutral-600">Bank Details</p>
+                {selectedInvoice.bank_name && <div><p className="label">Bank</p><p className="text-sm">{selectedInvoice.bank_name}</p></div>}
+                {selectedInvoice.account_number && <div><p className="label">Account #</p><p className="text-sm">{selectedInvoice.account_number}</p></div>}
+                {selectedInvoice.ifsc_code && <div><p className="label">IFSC</p><p className="text-sm">{selectedInvoice.ifsc_code}</p></div>}
+              </div>
+            )}
+
+            {selectedInvoice.notes && (
+              <div>
+                <p className="label">Notes</p>
+                <p className="text-sm text-neutral-600">{selectedInvoice.notes}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal isOpen={showEditModal} onClose={() => setShowEditModal(false)} title="Edit Invoice" size="2xl"
+        footer={
+          <>
+            <button onClick={() => setShowEditModal(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleEditSave} className="btn-primary">Save Changes</button>
+          </>
+        }>
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            {selectedInvoice && (
+              <>
+                <div>
+                  <p className="label">Invoice #</p>
+                  <p className="text-sm font-semibold text-primary-700">{selectedInvoice.invoice_number}</p>
+                </div>
+                <div>
+                  <p className="label">Customer</p>
+                  <p className="text-sm font-medium">{selectedInvoice.customer_name}</p>
+                </div>
+                <div>
+                  <p className="label">Status</p>
+                  <StatusBadge status={selectedInvoice.status} />
+                </div>
+              </>
+            )}
+            <div>
+              <label className="label">Invoice Date</label>
+              <input type="date" value={editForm.invoice_date} onChange={e => setEditForm(f => ({ ...f, invoice_date: e.target.value }))} className="input" />
+            </div>
+            <div>
+              <label className="label">Due Date</label>
+              <input type="date" value={editForm.due_date} onChange={e => setEditForm(f => ({ ...f, due_date: e.target.value }))} className="input" />
+            </div>
+            <div>
+              <label className="label">Payment Terms</label>
+              <input value={editForm.payment_terms} onChange={e => setEditForm(f => ({ ...f, payment_terms: e.target.value }))} className="input" />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold text-neutral-700">Line Items</p>
+              <button onClick={addEditItem} className="btn-ghost text-xs"><Plus className="w-3.5 h-3.5" /> Add Item</button>
+            </div>
+            <div className="border border-neutral-200 rounded-lg overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-neutral-50">
+                  <tr>
+                    <th className="table-header text-left">Product / Description</th>
+                    <th className="table-header text-right w-16">Qty</th>
+                    <th className="table-header text-right w-24">Rate</th>
+                    <th className="table-header text-right w-16">Disc%</th>
+                    <th className="table-header text-right w-16">Tax%</th>
+                    <th className="table-header text-right w-24">Total</th>
+                    <th className="table-header w-8" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {editItems.map((item, i) => (
+                    <tr key={i} className="border-t border-neutral-100">
+                      <td className="px-3 py-2">
+                        <select value={item.product_id} onChange={e => updateEditItem(i, 'product_id', e.target.value)} className="input text-xs">
+                          <option value="">-- Select Product --</option>
+                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                        {!item.product_id && <input value={item.product_name} onChange={e => updateEditItem(i, 'product_name', e.target.value)} className="input text-xs mt-1" placeholder="Or type item name..." />}
+                        <input value={item.description} onChange={e => updateEditItem(i, 'description', e.target.value)} className="input text-xs mt-1" placeholder="Description (optional)" />
+                      </td>
+                      <td className="px-2 py-2"><input type="number" value={item.quantity} onChange={e => updateEditItem(i, 'quantity', e.target.value)} className="input text-xs text-right" /></td>
+                      <td className="px-2 py-2"><input type="number" value={item.unit_price} onChange={e => updateEditItem(i, 'unit_price', e.target.value)} className="input text-xs text-right" /></td>
+                      <td className="px-2 py-2"><input type="number" value={item.discount_pct} onChange={e => updateEditItem(i, 'discount_pct', e.target.value)} className="input text-xs text-right" /></td>
+                      <td className="px-2 py-2"><input type="number" value={item.tax_pct} onChange={e => updateEditItem(i, 'tax_pct', e.target.value)} className="input text-xs text-right" /></td>
+                      <td className="px-2 py-2 text-right text-sm font-medium">{formatCurrency(item.total_price)}</td>
+                      <td className="px-2 py-2"><button onClick={() => removeEditItem(i)} className="text-neutral-400 hover:text-error-500 text-lg leading-none">&times;</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end mt-2 gap-3 items-center">
+              <div className="flex items-center gap-2">
+                <label className="label mb-0 text-xs">Courier</label>
+                <input type="number" value={editForm.courier_charges} onChange={e => setEditForm(f => ({ ...f, courier_charges: e.target.value }))} className="input w-24 text-right text-xs" />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="label mb-0 text-xs">Discount</label>
+                <input type="number" value={editForm.discount_amount} onChange={e => setEditForm(f => ({ ...f, discount_amount: e.target.value }))} className="input w-24 text-right text-xs" />
+              </div>
+              <div className="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-bold">
+                {formatCurrency(editTotal)}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 p-4 bg-neutral-50 rounded-lg">
+            <p className="col-span-3 text-xs font-semibold text-neutral-600 mb-1">Bank & Payment Details</p>
+            <div>
+              <label className="label">Bank Name</label>
+              <input value={editForm.bank_name} onChange={e => setEditForm(f => ({ ...f, bank_name: e.target.value }))} className="input" />
+            </div>
+            <div>
+              <label className="label">Account Number</label>
+              <input value={editForm.account_number} onChange={e => setEditForm(f => ({ ...f, account_number: e.target.value }))} className="input" placeholder="XXXX XXXX XXXX" />
+            </div>
+            <div>
+              <label className="label">IFSC Code</label>
+              <input value={editForm.ifsc_code} onChange={e => setEditForm(f => ({ ...f, ifsc_code: e.target.value }))} className="input" placeholder="HDFC0001234" />
+            </div>
+            <div className="col-span-3">
+              <label className="label">Notes</label>
+              <input value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className="input" placeholder="Optional notes..." />
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="New Invoice" size="2xl"
+        footer={
+          <>
+            <button onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handleSave} className="btn-primary">Create Invoice</button>
+          </>
+        }>
+        <div className="space-y-4">
+          {form.sales_order_id && selectedSO && (
+            <div className="p-3 bg-primary-50 border border-primary-100 rounded-lg flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-primary-700">Creating from Sales Order</p>
+                <p className="text-sm text-primary-800 font-medium">{selectedSO.so_number} &mdash; {selectedSO.customer_name}</p>
+              </div>
+              <StatusBadge status={selectedSO.status} />
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="label">Customer Name *</label>
+              <input value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} className="input" placeholder="Full name" />
+            </div>
+            <div>
+              <label className="label">Phone</label>
+              <input value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))} className="input" placeholder="+91 XXXXX" />
+            </div>
+            <div>
+              <label className="label">Invoice Date</label>
+              <input type="date" value={form.invoice_date} onChange={e => setForm(f => ({ ...f, invoice_date: e.target.value }))} className="input" />
+            </div>
+            <div>
+              <label className="label">Due Date</label>
+              <input type="date" value={form.due_date} onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))} className="input" />
+            </div>
+            <div>
+              <label className="label">Payment Terms</label>
+              <input value={form.payment_terms} onChange={e => setForm(f => ({ ...f, payment_terms: e.target.value }))} className="input" />
+            </div>
+            <div className="col-span-3">
+              <label className="label">Address Line 1</label>
+              <input value={form.customer_address} onChange={e => setForm(f => ({ ...f, customer_address: e.target.value }))} className="input" placeholder="House/Flat, Street" />
+            </div>
+            <div className="col-span-3">
+              <label className="label">Address Line 2</label>
+              <input value={form.customer_address2} onChange={e => setForm(f => ({ ...f, customer_address2: e.target.value }))} className="input" placeholder="Area / Colony / Landmark" />
+            </div>
+            <div>
+              <label className="label">City</label>
+              <input value={form.customer_city} onChange={e => setForm(f => ({ ...f, customer_city: e.target.value }))} className="input" placeholder="City" />
+            </div>
+            <div>
+              <label className="label">State</label>
+              <input value={form.customer_state} onChange={e => setForm(f => ({ ...f, customer_state: e.target.value }))} className="input" placeholder="State" />
+            </div>
+            <div>
+              <label className="label">PIN Code</label>
+              <input value={form.customer_pincode} onChange={e => setForm(f => ({ ...f, customer_pincode: e.target.value }))} className="input" placeholder="411001" maxLength={6} />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold text-neutral-700">Line Items</p>
+              <button onClick={addItem} className="btn-ghost text-xs"><Plus className="w-3.5 h-3.5" /> Add Item</button>
+            </div>
+            <div className="border border-neutral-200 rounded-lg overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-neutral-50">
+                  <tr>
+                    <th className="table-header text-left">Product / Description</th>
+                    <th className="table-header text-right w-16">Qty</th>
+                    <th className="table-header text-right w-24">Rate</th>
+                    <th className="table-header text-right w-16">Disc%</th>
+                    <th className="table-header text-right w-16">Tax%</th>
+                    <th className="table-header text-right w-24">Total</th>
+                    <th className="table-header w-8" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item, i) => (
+                    <tr key={i} className="border-t border-neutral-100">
+                      <td className="px-3 py-2">
+                        <select value={item.product_id} onChange={e => updateItem(i, 'product_id', e.target.value)} className="input text-xs">
+                          <option value="">-- Select Product --</option>
+                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                        {!item.product_id && <input value={item.product_name} onChange={e => updateItem(i, 'product_name', e.target.value)} className="input text-xs mt-1" placeholder="Or type item name..." />}
+                        <input value={item.description} onChange={e => updateItem(i, 'description', e.target.value)} className="input text-xs mt-1" placeholder="Description (optional)" />
+                      </td>
+                      <td className="px-2 py-2"><input type="number" value={item.quantity} onChange={e => updateItem(i, 'quantity', e.target.value)} className="input text-xs text-right" /></td>
+                      <td className="px-2 py-2"><input type="number" value={item.unit_price} onChange={e => updateItem(i, 'unit_price', e.target.value)} className="input text-xs text-right" /></td>
+                      <td className="px-2 py-2"><input type="number" value={item.discount_pct} onChange={e => updateItem(i, 'discount_pct', e.target.value)} className="input text-xs text-right" /></td>
+                      <td className="px-2 py-2"><input type="number" value={item.tax_pct} onChange={e => updateItem(i, 'tax_pct', e.target.value)} className="input text-xs text-right" /></td>
+                      <td className="px-2 py-2 text-right text-sm font-medium">{formatCurrency(item.total_price)}</td>
+                      <td className="px-2 py-2"><button onClick={() => removeItem(i)} className="text-neutral-400 hover:text-error-500 text-lg leading-none">&times;</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end mt-2 gap-3 items-center">
+              <div className="flex items-center gap-2">
+                <label className="label mb-0 text-xs">Courier</label>
+                <input type="number" value={form.courier_charges} onChange={e => setForm(f => ({ ...f, courier_charges: e.target.value }))} className="input w-24 text-right text-xs" />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="label mb-0 text-xs">Discount</label>
+                <input type="number" value={form.discount_amount} onChange={e => setForm(f => ({ ...f, discount_amount: e.target.value }))} className="input w-24 text-right text-xs" />
+              </div>
+              <div className="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-bold">
+                {formatCurrency(total)}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 p-4 bg-neutral-50 rounded-lg">
+            <p className="col-span-3 text-xs font-semibold text-neutral-600 mb-1">Bank & Payment Details</p>
+            <div>
+              <label className="label">Bank Name</label>
+              <input value={form.bank_name} onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))} className="input" />
+            </div>
+            <div>
+              <label className="label">Account Number</label>
+              <input value={form.account_number} onChange={e => setForm(f => ({ ...f, account_number: e.target.value }))} className="input" placeholder="XXXX XXXX XXXX" />
+            </div>
+            <div>
+              <label className="label">IFSC Code</label>
+              <input value={form.ifsc_code} onChange={e => setForm(f => ({ ...f, ifsc_code: e.target.value }))} className="input" placeholder="HDFC0001234" />
+            </div>
+            <div className="col-span-3">
+              <label className="label">Notes</label>
+              <input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input" placeholder="Optional notes..." />
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {showPrint && selectedInvoice && (
+        <div className="fixed inset-0 z-50 bg-neutral-100 overflow-auto">
+          <div className="no-print flex items-center justify-between bg-white border-b border-neutral-200 px-6 py-3">
+            <p className="text-sm font-semibold text-neutral-800">Invoice Preview - {selectedInvoice.invoice_number}</p>
+            <div className="flex gap-2">
+              <button onClick={handlePrint} className="btn-primary">Print / Save PDF</button>
+              <button onClick={() => setShowPrint(false)} className="btn-secondary">Close</button>
+            </div>
+          </div>
+          <div ref={printRef} className="py-6 print-content">
+            <InvoicePrint invoice={selectedInvoice} />
+          </div>
+        </div>
+      )}
+
+      <Modal isOpen={showPayModal} onClose={() => setShowPayModal(false)} title="Record Payment"
+        subtitle={selectedInvoice ? `Invoice ${selectedInvoice.invoice_number} - ${selectedInvoice.customer_name}` : ''}
+        size="sm"
+        footer={
+          <>
+            <button onClick={() => setShowPayModal(false)} className="btn-secondary">Cancel</button>
+            <button onClick={handlePayment} className="btn-primary">Record Payment</button>
+          </>
+        }>
+        <div className="space-y-3">
+          {selectedInvoice && (
+            <div className="bg-neutral-50 rounded-lg p-3">
+              <div className="flex justify-between text-sm">
+                <span className="text-neutral-600">Invoice Total</span>
+                <span className="font-semibold">{formatCurrency(selectedInvoice.total_amount)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-neutral-600">Already Paid</span>
+                <span className="text-success-600 font-semibold">{formatCurrency(selectedInvoice.paid_amount)}</span>
+              </div>
+              <div className="flex justify-between text-sm font-bold border-t border-neutral-200 pt-2 mt-2">
+                <span>Outstanding</span>
+                <span className="text-error-600">{formatCurrency(selectedInvoice.outstanding_amount)}</span>
+              </div>
+            </div>
+          )}
+          <div>
+            <label className="label">Payment Date</label>
+            <input type="date" value={payForm.payment_date} onChange={e => setPayForm(f => ({ ...f, payment_date: e.target.value }))} className="input" />
+          </div>
+          <div>
+            <label className="label">Payment Amount</label>
+            <input type="number" value={payForm.amount} onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))} className="input" />
+          </div>
+          <div>
+            <label className="label">Payment Mode</label>
+            <select value={payForm.payment_mode} onChange={e => setPayForm(f => ({ ...f, payment_mode: e.target.value }))} className="input">
+              {['Cash', 'Bank Transfer', 'UPI', 'Cheque', 'Card'].map(m => <option key={m}>{m}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Reference Number</label>
+            <input value={payForm.reference_number} onChange={e => setPayForm(f => ({ ...f, reference_number: e.target.value }))} className="input" placeholder="UTR / Cheque no. / Optional" />
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={handleDelete}
+        title="Cancel Invoice"
+        message={selectedInvoice ? `Are you sure you want to cancel invoice ${selectedInvoice.invoice_number}? This action cannot be undone.` : ''}
+        confirmLabel="Cancel Invoice"
+        isDanger
+      />
+    </div>
+  );
+}
