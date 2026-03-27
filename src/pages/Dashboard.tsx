@@ -1,5 +1,9 @@
 import { useState, useEffect } from 'react';
-import { CalendarDays, Bell, Package, Users, AlertTriangle, ArrowRight, MapPin, Clock, TrendingUp, Star, Truck, FileText, ShoppingCart, BarChart2 } from 'lucide-react';
+import {
+  Bell, Package, AlertTriangle, ArrowRight, Clock, TrendingUp, Truck, FileText,
+  CheckCircle, Users, Send, Receipt, BarChart2, CalendarDays, ShoppingCart, Zap,
+  IndianRupee, AlertCircle
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { formatCurrency, formatDate } from '../lib/utils';
 import { useDateRange } from '../contexts/DateRangeContext';
@@ -10,20 +14,12 @@ interface DashboardProps {
   onNavigate: (page: ActivePage) => void;
 }
 
-interface ServiceRevenue {
+interface PendingAction {
+  type: 'followup' | 'dispatch' | 'payment' | 'stock';
+  priority: 'high' | 'medium' | 'low';
   label: string;
-  amount: number;
-  color: string;
-}
-
-interface CityCount {
-  city: string;
-  count: number;
-}
-
-interface Alert {
-  type: 'warning' | 'error' | 'info';
-  message: string;
+  detail: string;
+  action: () => void;
 }
 
 const APPT_COLORS: Record<string, string> = {
@@ -38,111 +34,66 @@ const APPT_COLORS: Record<string, string> = {
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
   const { dateRange } = useDateRange();
-  const { isAdmin } = useAuth();
+  const { isAdmin, canAccessFinance, canAccessSales, canAccessInventory } = useAuth();
 
   const [followupsToday, setFollowupsToday] = useState<Customer[]>([]);
   const [todayAppts, setTodayAppts] = useState<Appointment[]>([]);
-  const [pendingDeliveries, setPendingDeliveries] = useState(0);
+  const [pendingDispatches, setPendingDispatches] = useState(0);
   const [pendingPayments, setPendingPayments] = useState(0);
   const [totalReceivable, setTotalReceivable] = useState(0);
-  const [topCities, setTopCities] = useState<CityCount[]>([]);
-  const [serviceRevenue, setServiceRevenue] = useState<ServiceRevenue[]>([]);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [overdueCount, setOverdueCount] = useState(0);
+  const [lowStockItems, setLowStockItems] = useState<{ name: string; stock_quantity: number; low_stock_alert: number }[]>([]);
   const [recentInvoices, setRecentInvoices] = useState<{ id: string; invoice_number: string; customer_name: string; total_amount: number; status: string; invoice_date: string }[]>([]);
+  const [pendingOrders, setPendingOrders] = useState(0);
+  const [monthRevenue, setMonthRevenue] = useState(0);
+  const [monthCollected, setMonthCollected] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadDashboardData();
-  }, [dateRange]);
+  useEffect(() => { loadDashboardData(); }, [dateRange]);
 
-  const toLocalDateStr = (d: Date) => {
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  };
+  const toLocalDateStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
   const loadDashboardData = async () => {
     setLoading(true);
     const today = toLocalDateStr(new Date());
-    const fromDate = dateRange.from;
-    const toDate = dateRange.to;
+    const { from: fromDate, to: toDate } = dateRange;
 
     const [
-      followupRes,
-      todayApptRes,
-      challansRes,
-      invoicesRes,
-      recentRes,
-      customersRes,
-      lowStockRes,
-      invoiceItemsRes,
+      followupRes, todayApptRes, dispatchRes, invoicesRes, recentRes,
+      lowStockRes, ordersRes, paymentsRes,
     ] = await Promise.all([
       supabase.from('customers').select('id, name, phone, next_followup_date, city').eq('next_followup_date', today).eq('is_active', true),
       supabase.from('appointments').select('*').gte('start_time', today).lte('start_time', today + 'T23:59:59').order('start_time'),
-      supabase.from('delivery_challans').select('id, status').in('status', ['draft', 'dispatched']),
-      supabase.from('invoices').select('id, total_amount, outstanding_amount, status').gte('invoice_date', fromDate).lte('invoice_date', toDate).neq('status', 'cancelled'),
-      supabase.from('invoices').select('id, invoice_number, customer_name, total_amount, status, invoice_date').order('created_at', { ascending: false }).limit(6),
-      supabase.from('customers').select('city').eq('is_active', true),
+      supabase.from('dispatch_entries').select('id', { count: 'exact', head: true }).in('status', ['pending', 'dispatched', 'in_transit']),
+      supabase.from('invoices').select('id, total_amount, outstanding_amount, status, invoice_number, customer_name, invoice_date').gte('invoice_date', fromDate).lte('invoice_date', toDate).neq('status', 'cancelled'),
+      supabase.from('invoices').select('id, invoice_number, customer_name, total_amount, status, invoice_date').order('created_at', { ascending: false }).limit(5),
       supabase.from('products').select('name, stock_quantity, low_stock_alert').eq('is_active', true),
-      supabase.from('invoice_items').select('product_name, total_price, created_at').gte('created_at', fromDate).lte('created_at', toDate),
+      supabase.from('sales_orders').select('id', { count: 'exact', head: true }).in('status', ['confirmed', 'draft']),
+      supabase.from('payments').select('amount').gte('payment_date', fromDate).lte('payment_date', toDate).eq('payment_type', 'receipt'),
     ]);
 
     setFollowupsToday((followupRes.data || []) as Customer[]);
     setTodayAppts((todayApptRes.data || []) as Appointment[]);
-    setPendingDeliveries((challansRes.data || []).length);
+    setPendingDispatches(dispatchRes.count || 0);
 
-    const receivable = (invoicesRes.data || []).reduce((s, i) => s + (i.outstanding_amount || 0), 0);
+    const allInvoices = invoicesRes.data || [];
+    const receivable = allInvoices.reduce((s, i) => s + (i.outstanding_amount || 0), 0);
     setTotalReceivable(receivable);
-
-    const pendingCount = (invoicesRes.data || []).filter(i => i.status !== 'paid' && i.status !== 'cancelled').length;
-    setPendingPayments(pendingCount);
+    setMonthRevenue(allInvoices.reduce((s, i) => s + i.total_amount, 0));
+    setPendingPayments(allInvoices.filter(i => !['paid', 'cancelled'].includes(i.status)).length);
+    setOverdueCount(allInvoices.filter(i => i.status === 'overdue').length);
 
     setRecentInvoices(recentRes.data || []);
 
-    const cityMap: Record<string, number> = {};
-    (customersRes.data || []).forEach((c: { city?: string }) => {
-      if (c.city) {
-        const key = c.city.trim();
-        cityMap[key] = (cityMap[key] || 0) + 1;
-      }
-    });
-    const sortedCities = Object.entries(cityMap).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([city, count]) => ({ city, count }));
-    setTopCities(sortedCities);
+    const lowStock = (lowStockRes.data || []).filter((p: { stock_quantity: number; low_stock_alert: number }) => p.stock_quantity <= p.low_stock_alert);
+    setLowStockItems(lowStock.slice(0, 5));
 
-    const vastuRevenue = (invoiceItemsRes.data || [])
-      .filter((i: { product_name: string }) => /vastu|direction|north|south|east|west|pyramid|yantra/i.test(i.product_name))
-      .reduce((s: number, i: { total_price: number }) => s + i.total_price, 0);
-
-    const productRevenue = (invoiceItemsRes.data || [])
-      .filter((i: { product_name: string }) => /gemstone|crystal|rudraksha|bracelet|ring|pendant/i.test(i.product_name))
-      .reduce((s: number, i: { total_price: number }) => s + i.total_price, 0);
-
-    const consultRevenue = (invoiceItemsRes.data || [])
-      .filter((i: { product_name: string }) => /consult|astro|reading|session|report|chart|kundali|horoscope/i.test(i.product_name))
-      .reduce((s: number, i: { total_price: number }) => s + i.total_price, 0);
-
-    const totalRevenue = (invoicesRes.data || []).reduce((s, i) => s + i.total_amount, 0);
-    const otherRevenue = Math.max(0, totalRevenue - vastuRevenue - productRevenue - consultRevenue);
-
-    setServiceRevenue([
-      { label: 'Vastu Services', amount: vastuRevenue, color: 'bg-accent-500' },
-      { label: 'Products', amount: productRevenue, color: 'bg-primary-500' },
-      { label: 'Consultation', amount: consultRevenue, color: 'bg-blue-500' },
-      { label: 'Other', amount: otherRevenue, color: 'bg-neutral-300' },
-    ].filter(s => s.amount > 0));
-
-    const alertList: Alert[] = [];
-    (lowStockRes.data || []).forEach((p: { name: string; stock_quantity: number; low_stock_alert: number }) => {
-      if (p.stock_quantity <= p.low_stock_alert) {
-        alertList.push({ type: 'warning', message: `Low Stock: ${p.name} (${p.stock_quantity} left)` });
-      }
-    });
-    const overdueCount = (invoicesRes.data || []).filter(i => i.status === 'overdue').length;
-    if (overdueCount > 0) alertList.push({ type: 'error', message: `${overdueCount} overdue invoice(s) need attention` });
-    setAlerts(alertList.slice(0, 4));
+    setPendingOrders(ordersRes.count || 0);
+    const collected = (paymentsRes.data || []).reduce((s: number, p: { amount: number }) => s + p.amount, 0);
+    setMonthCollected(collected);
 
     setLoading(false);
   };
-
-  const formatTime = (iso: string) => new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 
   const getStatusColor = (status: string) => {
     const map: Record<string, string> = {
@@ -155,42 +106,64 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     return map[status] || 'text-neutral-600 bg-neutral-100';
   };
 
-  const totalServiceRevenue = serviceRevenue.reduce((s, r) => s + r.amount, 0);
+  const formatTime = (iso: string) => new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-  const kpis = [
-    {
-      label: "Today's Appointments",
-      value: todayAppts.length,
-      sub: todayAppts.length > 0 ? todayAppts[0]?.appointment_type : 'No appointments today',
-      icon: CalendarDays,
-      color: 'bg-primary-50 text-primary-600',
-      onClick: () => onNavigate('calendar'),
-    },
-    {
-      label: 'Follow-ups Due',
-      value: followupsToday.length,
-      sub: followupsToday.length > 0 ? followupsToday.map(f => f.name).join(', ').slice(0, 30) + (followupsToday.length > 2 ? '...' : '') : 'All clear',
-      icon: Bell,
-      color: followupsToday.length > 0 ? 'bg-warning-50 text-warning-600' : 'bg-success-50 text-success-600',
-      onClick: () => onNavigate('crm'),
-    },
-    {
-      label: 'Pending Deliveries',
-      value: pendingDeliveries,
-      sub: 'Challans in progress',
-      icon: Truck,
-      color: 'bg-blue-50 text-blue-600',
-      onClick: () => onNavigate('challans'),
-    },
-    {
-      label: 'Pending Payments',
-      value: pendingDeliveries > 0 ? `${formatCurrency(totalReceivable)}` : formatCurrency(0),
-      sub: `${pendingPayments} invoice(s) unpaid`,
-      icon: TrendingUp,
-      color: totalReceivable > 0 ? 'bg-error-50 text-error-600' : 'bg-success-50 text-success-600',
-      onClick: () => onNavigate('ledger'),
-    },
+  const pendingActions: PendingAction[] = [
+    ...followupsToday.map(c => ({
+      type: 'followup' as const,
+      priority: 'high' as const,
+      label: `Follow up: ${c.name}`,
+      detail: c.city ? `Call or message — ${c.city}` : 'Follow-up due today',
+      action: () => onNavigate('crm'),
+    })),
+    ...(overdueCount > 0 ? [{
+      type: 'payment' as const,
+      priority: 'high' as const,
+      label: `${overdueCount} overdue invoice${overdueCount > 1 ? 's' : ''}`,
+      detail: `${formatCurrency(totalReceivable)} total outstanding`,
+      action: () => onNavigate('invoices'),
+    }] : []),
+    ...(pendingDispatches > 0 ? [{
+      type: 'dispatch' as const,
+      priority: 'medium' as const,
+      label: `${pendingDispatches} pending dispatch${pendingDispatches > 1 ? 'es' : ''}`,
+      detail: 'Orders awaiting shipment',
+      action: () => onNavigate('dispatch'),
+    }] : []),
+    ...(pendingOrders > 0 ? [{
+      type: 'dispatch' as const,
+      priority: 'medium' as const,
+      label: `${pendingOrders} confirmed order${pendingOrders > 1 ? 's' : ''} to dispatch`,
+      detail: 'Sales orders ready for dispatch',
+      action: () => onNavigate('sales-orders'),
+    }] : []),
+    ...lowStockItems.map(p => ({
+      type: 'stock' as const,
+      priority: 'low' as const,
+      label: `Low stock: ${p.name}`,
+      detail: `${p.stock_quantity} left (alert: ${p.low_stock_alert})`,
+      action: () => onNavigate('inventory'),
+    })),
   ];
+
+  const actionTypeIcon = (type: string) => {
+    if (type === 'followup') return Bell;
+    if (type === 'dispatch') return Send;
+    if (type === 'payment') return IndianRupee;
+    return Package;
+  };
+
+  const actionTypeBg = (priority: string) => {
+    if (priority === 'high') return 'bg-error-50 border-error-200';
+    if (priority === 'medium') return 'bg-warning-50 border-warning-200';
+    return 'bg-blue-50 border-blue-200';
+  };
+
+  const actionTypeIconColor = (priority: string) => {
+    if (priority === 'high') return 'text-error-600 bg-error-100';
+    if (priority === 'medium') return 'text-warning-600 bg-warning-100';
+    return 'text-blue-600 bg-blue-100';
+  };
 
   if (loading) {
     return (
@@ -202,42 +175,104 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
   return (
     <div className="flex-1 overflow-y-auto bg-neutral-50">
-      <div className="p-6 space-y-5">
-        {followupsToday.length > 0 && (
-          <div className="flex items-center gap-3 p-3 bg-warning-50 border border-warning-200 rounded-xl">
-            <Bell className="w-4 h-4 text-warning-600 shrink-0" />
-            <div className="flex-1">
-              <p className="text-sm font-semibold text-warning-800">
-                {followupsToday.length} follow-up{followupsToday.length > 1 ? 's' : ''} due today
-              </p>
-              <p className="text-xs text-warning-600 mt-0.5">
-                {followupsToday.map(c => c.name).join(' · ')}
-              </p>
-            </div>
-            <button onClick={() => onNavigate('crm')} className="flex items-center gap-1 text-xs font-semibold text-warning-700 hover:text-warning-900">
-              View <ArrowRight className="w-3 h-3" />
-            </button>
+      <div className="p-5 space-y-5">
+
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold text-neutral-900">Operations Dashboard</h1>
+            <p className="text-xs text-neutral-400 mt-0.5">{new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            {canAccessSales && (
+              <button onClick={() => onNavigate('sales-orders')} className="btn-primary text-xs flex items-center gap-1.5">
+                <ShoppingCart className="w-3.5 h-3.5" /> New Order
+              </button>
+            )}
+            {canAccessSales && (
+              <button onClick={() => onNavigate('invoices')} className="btn-secondary text-xs flex items-center gap-1.5">
+                <Receipt className="w-3.5 h-3.5" /> New Invoice
+              </button>
+            )}
+          </div>
+        </div>
 
         <div className="grid grid-cols-4 gap-4">
-          {kpis.map((kpi) => (
-            <button key={kpi.label} onClick={kpi.onClick}
-              className="card text-left hover:shadow-md transition-all group cursor-pointer">
-              <div className="flex items-start justify-between mb-3">
-                <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider leading-tight">{kpi.label}</p>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${kpi.color}`}>
-                  <kpi.icon className="w-3.5 h-3.5" />
-                </div>
+          <button onClick={() => onNavigate('sales-orders')} className="card text-left hover:shadow-md transition-all group">
+            <div className="flex items-start justify-between mb-3">
+              <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Pending Orders</p>
+              <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center">
+                <FileText className="w-3.5 h-3.5 text-blue-600" />
               </div>
-              <p className="text-2xl font-bold text-neutral-900">{kpi.value}</p>
-              <p className="text-xs mt-1 text-neutral-400 truncate">{kpi.sub}</p>
-            </button>
-          ))}
+            </div>
+            <p className="text-2xl font-bold text-neutral-900">{pendingOrders}</p>
+            <p className="text-xs mt-1 text-neutral-400">Confirmed, needs dispatch</p>
+          </button>
+
+          <button onClick={() => onNavigate('dispatch')} className="card text-left hover:shadow-md transition-all group">
+            <div className="flex items-start justify-between mb-3">
+              <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Pending Dispatches</p>
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${pendingDispatches > 0 ? 'bg-warning-50' : 'bg-success-50'}`}>
+                <Send className={`w-3.5 h-3.5 ${pendingDispatches > 0 ? 'text-warning-600' : 'text-success-600'}`} />
+              </div>
+            </div>
+            <p className={`text-2xl font-bold ${pendingDispatches > 0 ? 'text-warning-700' : 'text-success-700'}`}>{pendingDispatches}</p>
+            <p className="text-xs mt-1 text-neutral-400">In transit / dispatched</p>
+          </button>
+
+          <button onClick={() => onNavigate('invoices')} className="card text-left hover:shadow-md transition-all group">
+            <div className="flex items-start justify-between mb-3">
+              <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Payment Follow-up</p>
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${pendingPayments > 0 ? 'bg-error-50' : 'bg-success-50'}`}>
+                <TrendingUp className={`w-3.5 h-3.5 ${pendingPayments > 0 ? 'text-error-600' : 'text-success-600'}`} />
+              </div>
+            </div>
+            <p className={`text-xl font-bold ${pendingPayments > 0 ? 'text-error-700' : 'text-success-700'}`}>{formatCurrency(totalReceivable)}</p>
+            <p className="text-xs mt-1 text-neutral-400">{pendingPayments} unpaid invoice{pendingPayments !== 1 ? 's' : ''}</p>
+          </button>
+
+          <button onClick={() => onNavigate('inventory')} className="card text-left hover:shadow-md transition-all group">
+            <div className="flex items-start justify-between mb-3">
+              <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Low Stock Alerts</p>
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${lowStockItems.length > 0 ? 'bg-warning-50' : 'bg-success-50'}`}>
+                <Package className={`w-3.5 h-3.5 ${lowStockItems.length > 0 ? 'text-warning-600' : 'text-success-600'}`} />
+              </div>
+            </div>
+            <p className={`text-2xl font-bold ${lowStockItems.length > 0 ? 'text-warning-700' : 'text-success-700'}`}>{lowStockItems.length}</p>
+            <p className="text-xs mt-1 text-neutral-400">Products need restocking</p>
+          </button>
         </div>
 
         <div className="grid grid-cols-3 gap-5">
           <div className="col-span-2 space-y-5">
+            {pendingActions.length > 0 && (
+              <div className="card">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-semibold text-neutral-800 flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-primary-500" /> Pending Actions
+                    <span className="text-[10px] bg-error-100 text-error-700 px-1.5 py-0.5 rounded-full font-bold">{pendingActions.length}</span>
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  {pendingActions.slice(0, 6).map((action, i) => {
+                    const Icon = actionTypeIcon(action.type);
+                    return (
+                      <button key={i} onClick={action.action}
+                        className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all hover:opacity-80 text-left ${actionTypeBg(action.priority)}`}>
+                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${actionTypeIconColor(action.priority)}`}>
+                          <Icon className="w-3.5 h-3.5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-neutral-800 truncate">{action.label}</p>
+                          <p className="text-[10px] text-neutral-500">{action.detail}</p>
+                        </div>
+                        <ArrowRight className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {todayAppts.length > 0 && (
               <div className="card">
                 <div className="flex items-center justify-between mb-3">
@@ -249,22 +284,15 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 <div className="space-y-2">
                   {todayAppts.map(a => (
                     <div key={a.id} className={`flex items-center gap-3 p-3 rounded-xl border ${APPT_COLORS[a.appointment_type] || 'bg-blue-50 border-blue-200'}`}>
-                      <div className="shrink-0">
-                        <Clock className="w-4 h-4" />
-                      </div>
+                      <Clock className="w-4 h-4 shrink-0" />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold truncate">{a.title}</p>
-                        {a.customer_name && <p className="text-xs opacity-75 truncate">{a.customer_name}</p>}
+                        {a.customer_name && <p className="text-xs opacity-75">{a.customer_name}</p>}
                       </div>
                       <div className="text-right shrink-0">
                         <p className="text-xs font-medium">{formatTime(a.start_time)}</p>
                         <p className="text-[10px] opacity-60">{a.appointment_type}</p>
                       </div>
-                      {a.location && (
-                        <div className="flex items-center gap-1 text-xs opacity-70">
-                          <MapPin className="w-3 h-3" />{a.city || a.location}
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
@@ -292,7 +320,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {recentInvoices.map((inv) => (
+                    {recentInvoices.map(inv => (
                       <tr key={inv.id} className="border-b border-neutral-50 hover:bg-neutral-50 transition-colors">
                         <td className="table-cell font-medium text-primary-700">{inv.invoice_number}</td>
                         <td className="table-cell">{inv.customer_name}</td>
@@ -309,98 +337,84 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             </div>
           </div>
 
-          <div className="space-y-5">
-            {isAdmin && (
+          <div className="space-y-4">
+            {canAccessFinance && (
               <div className="card">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">Revenue by Service</p>
-                  <button onClick={() => onNavigate('reports')} className="text-xs text-primary-600 hover:underline">Reports</button>
-                </div>
-                {serviceRevenue.length === 0 ? (
-                  <p className="text-xs text-neutral-400 text-center py-4">No data for selected period</p>
-                ) : (
-                  <div className="space-y-3">
-                    {serviceRevenue.map(s => (
-                      <div key={s.label}>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-medium text-neutral-700">{s.label}</span>
-                          <span className="text-xs font-semibold text-neutral-900">{formatCurrency(s.amount)}</span>
-                        </div>
-                        <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
-                          <div className={`h-full ${s.color} rounded-full transition-all`}
-                            style={{ width: totalServiceRevenue > 0 ? `${(s.amount / totalServiceRevenue) * 100}%` : '0%' }} />
-                        </div>
-                        <p className="text-[10px] text-neutral-400 mt-0.5">
-                          {totalServiceRevenue > 0 ? `${((s.amount / totalServiceRevenue) * 100).toFixed(0)}%` : '0%'}
-                        </p>
-                      </div>
-                    ))}
+                <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">Period Summary</p>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-neutral-600">Revenue</span>
+                    <span className="text-sm font-bold text-neutral-900">{formatCurrency(monthRevenue)}</span>
                   </div>
-                )}
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-neutral-600">Collected</span>
+                    <span className="text-sm font-bold text-success-700">{formatCurrency(monthCollected)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-neutral-600">Outstanding</span>
+                    <span className={`text-sm font-bold ${totalReceivable > 0 ? 'text-error-700' : 'text-neutral-400'}`}>{formatCurrency(totalReceivable)}</span>
+                  </div>
+                  {overdueCount > 0 && (
+                    <div className="flex items-center gap-2 p-2 bg-error-50 rounded-lg mt-1">
+                      <AlertCircle className="w-3.5 h-3.5 text-error-600 shrink-0" />
+                      <p className="text-xs text-error-700">{overdueCount} overdue invoice{overdueCount > 1 ? 's' : ''}</p>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            <div className="card">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">Top Cities</p>
-                <MapPin className="w-3.5 h-3.5 text-neutral-400" />
-              </div>
-              {topCities.length === 0 ? (
-                <p className="text-xs text-neutral-400 text-center py-4">No city data available</p>
-              ) : (
-                <div className="space-y-2.5">
-                  {topCities.map((c, i) => (
-                    <div key={c.city} className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-neutral-400 w-4">{i + 1}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-neutral-800 truncate">{c.city}</p>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <div className="h-1.5 rounded-full bg-primary-500" style={{ width: `${Math.max(20, (c.count / topCities[0].count) * 60)}px` }} />
-                        <span className="text-xs font-semibold text-neutral-600 w-5 text-right">{c.count}</span>
-                        <Users className="w-3 h-3 text-neutral-400" />
-                      </div>
-                    </div>
-                  ))}
+            {followupsToday.length > 0 && (
+              <div className="card">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">Follow-ups Today</p>
+                  <button onClick={() => onNavigate('crm')} className="text-xs text-primary-600 hover:underline">View CRM</button>
                 </div>
-              )}
-            </div>
-
-            <div className="card">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">Business Alerts</p>
-                <AlertTriangle className="w-3.5 h-3.5 text-neutral-400" />
-              </div>
-              {alerts.length === 0 ? (
-                <div className="flex flex-col items-center py-4">
-                  <div className="w-10 h-10 bg-success-50 rounded-full flex items-center justify-center mb-2">
-                    <Star className="w-5 h-5 text-success-600" />
-                  </div>
-                  <p className="text-xs text-neutral-500 text-center">All systems normal</p>
-                </div>
-              ) : (
                 <div className="space-y-2">
-                  {alerts.map((alert, i) => (
-                    <div key={i} className={`flex items-start gap-2 p-2.5 rounded-lg ${alert.type === 'error' ? 'bg-error-50' : alert.type === 'warning' ? 'bg-warning-50' : 'bg-blue-50'}`}>
-                      <AlertTriangle className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${alert.type === 'error' ? 'text-error-600' : alert.type === 'warning' ? 'text-warning-600' : 'text-blue-600'}`} />
-                      <p className="text-xs text-neutral-700">{alert.message}</p>
+                  {followupsToday.slice(0, 4).map(c => (
+                    <div key={c.id} className="flex items-center gap-2 p-2 bg-warning-50 rounded-lg">
+                      <Bell className="w-3.5 h-3.5 text-warning-600 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-neutral-800 truncate">{c.name}</p>
+                        {c.city && <p className="text-[10px] text-neutral-500">{c.city}</p>}
+                      </div>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {lowStockItems.length > 0 && (
+              <div className="card">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">Low Stock</p>
+                  <button onClick={() => onNavigate('inventory')} className="text-xs text-primary-600 hover:underline">Inventory</button>
+                </div>
+                <div className="space-y-2">
+                  {lowStockItems.map((p, i) => (
+                    <div key={i} className="flex items-center justify-between p-2 bg-warning-50 rounded-lg">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <AlertTriangle className="w-3.5 h-3.5 text-warning-600 shrink-0" />
+                        <p className="text-xs text-neutral-700 truncate">{p.name}</p>
+                      </div>
+                      <span className="text-xs font-bold text-warning-700 shrink-0 ml-2">{p.stock_quantity} left</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="card">
               <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">Quick Actions</p>
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  { label: 'New Invoice', page: 'invoices' as ActivePage, icon: FileText, color: 'text-primary-600 bg-primary-50' },
-                  { label: 'Sales Order', page: 'sales-orders' as ActivePage, icon: ShoppingCart, color: 'text-blue-600 bg-blue-50' },
-                  { label: 'Add Client', page: 'crm' as ActivePage, icon: Users, color: 'text-green-600 bg-green-50' },
-                  { label: 'Schedule', page: 'calendar' as ActivePage, icon: CalendarDays, color: 'text-teal-600 bg-teal-50' },
-                  { label: 'Add Product', page: 'inventory' as ActivePage, icon: Package, color: 'text-orange-600 bg-orange-50' },
-                  { label: 'Reports', page: 'reports' as ActivePage, icon: BarChart2, color: 'text-neutral-600 bg-neutral-100' },
-                ].map((action) => (
+                  { label: 'New Invoice', page: 'invoices' as ActivePage, icon: Receipt, color: 'text-primary-600 bg-primary-50', show: canAccessSales },
+                  { label: 'Sales Order', page: 'sales-orders' as ActivePage, icon: ShoppingCart, color: 'text-blue-600 bg-blue-50', show: canAccessSales },
+                  { label: 'Dispatch', page: 'dispatch' as ActivePage, icon: Send, color: 'text-orange-600 bg-orange-50', show: canAccessSales },
+                  { label: 'Add Client', page: 'crm' as ActivePage, icon: Users, color: 'text-green-600 bg-green-50', show: true },
+                  { label: 'Godowns', page: 'godowns' as ActivePage, icon: Package, color: 'text-teal-600 bg-teal-50', show: canAccessInventory },
+                  { label: 'Reports', page: 'reports' as ActivePage, icon: BarChart2, color: 'text-neutral-600 bg-neutral-100', show: true },
+                ].filter(a => a.show).map(action => (
                   <button key={action.label} onClick={() => onNavigate(action.page)}
                     className="flex items-center gap-2 p-2.5 rounded-xl border border-neutral-100 hover:bg-neutral-50 hover:border-neutral-200 transition-all text-left group">
                     <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${action.color}`}>
@@ -410,41 +424,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                   </button>
                 ))}
               </div>
-            </div>
-
-            <div className="card">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">Upcoming</p>
-                <button onClick={() => onNavigate('calendar')} className="text-xs text-primary-600 hover:underline flex items-center gap-1">
-                  Calendar <ArrowRight className="w-3 h-3" />
-                </button>
-              </div>
-              {(() => {
-                const upcoming = (() => {
-                  const now = new Date();
-                  const sevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-                  return todayAppts.filter(a => {
-                    const d = new Date(a.start_time);
-                    return d >= now && d <= sevenDays;
-                  }).slice(0, 4);
-                })();
-                if (upcoming.length === 0) {
-                  return <p className="text-xs text-neutral-400 text-center py-3">No upcoming appointments today</p>;
-                }
-                return (
-                  <div className="space-y-2">
-                    {upcoming.map(a => (
-                      <div key={a.id} className={`flex items-start gap-2 p-2 rounded-lg border text-xs ${APPT_COLORS[a.appointment_type] || 'bg-blue-50 border-blue-200 text-blue-700'}`}>
-                        <Clock className="w-3 h-3 mt-0.5 shrink-0" />
-                        <div className="min-w-0">
-                          <p className="font-medium truncate">{a.title}</p>
-                          <p className="opacity-70">{new Date(a.start_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
             </div>
           </div>
         </div>

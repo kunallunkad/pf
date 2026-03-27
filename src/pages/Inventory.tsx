@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, ArrowUpDown, Search, BarChart2, AlertTriangle, ImagePlus, Download, History } from 'lucide-react';
+import { Plus, ArrowUpDown, Search, BarChart2, AlertTriangle, ImagePlus, Download, History, Warehouse } from 'lucide-react';
 import { supabase, uploadProductImage } from '../lib/supabase';
 import { formatCurrency, generateId, exportToCSV, formatDate } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
@@ -7,7 +7,8 @@ import Modal from '../components/ui/Modal';
 import EmptyState from '../components/ui/EmptyState';
 import ActionMenu, { actionEdit, actionDelete } from '../components/ui/ActionMenu';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import type { Product, StockMovement } from '../types';
+import { fetchGodownStock } from '../services/godownService';
+import type { Product, StockMovement, GodownStock } from '../types';
 
 const CATEGORIES = ['All', 'Astro Products', 'Vastu Items', 'Healing Items'] as const;
 const UNITS = ['pcs', 'grams', 'kg', 'sets', 'ml', 'liters'];
@@ -28,6 +29,11 @@ export default function Inventory() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [confirmProduct, setConfirmProduct] = useState<Product | null>(null);
 
+  const [activeTab, setActiveTab] = useState<'products' | 'godown-stock'>('products');
+  const [godownStockData, setGodownStockData] = useState<GodownStock[]>([]);
+  const [godownStockSearch, setGodownStockSearch] = useState('');
+  const [godownStockLoading, setGodownStockLoading] = useState(false);
+
   const [showLedgerModal, setShowLedgerModal] = useState(false);
   const [ledgerProduct, setLedgerProduct] = useState<Product | null>(null);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
@@ -44,6 +50,9 @@ export default function Inventory() {
   const [imagePreview, setImagePreview] = useState<string>('');
 
   useEffect(() => { loadProducts(); }, []);
+  useEffect(() => {
+    if (activeTab === 'godown-stock') loadGodownStock();
+  }, [activeTab]);
 
   useEffect(() => {
     let data = products;
@@ -61,6 +70,23 @@ export default function Inventory() {
     setProducts(data || []);
     setLoading(false);
   };
+
+  const loadGodownStock = async () => {
+    setGodownStockLoading(true);
+    try {
+      const data = await fetchGodownStock();
+      setGodownStockData(data);
+    } catch (_) {
+      setGodownStockData([]);
+    }
+    setGodownStockLoading(false);
+  };
+
+  const filteredGodownStock = godownStockData.filter(gs => {
+    if (!godownStockSearch) return true;
+    const q = godownStockSearch.toLowerCase();
+    return gs.product?.name?.toLowerCase().includes(q) || gs.godown?.name?.toLowerCase().includes(q);
+  });
 
   const openAdd = () => {
     setEditing(null);
@@ -224,17 +250,108 @@ export default function Inventory() {
           <p className="text-xs text-neutral-500 mt-0.5">Curating divine inventory for earthly prosperity.</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={handleExport} className="btn-secondary">
-            <Download className="w-4 h-4" /> Export
-          </button>
-          <button onClick={openAdd} className="btn-primary">
-            <Plus className="w-4 h-4" /> Add Product
-          </button>
+          <div className="flex bg-neutral-100 rounded-lg p-1 gap-1">
+            <button onClick={() => setActiveTab('products')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${activeTab === 'products' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500 hover:text-neutral-700'}`}>
+              Products
+            </button>
+            <button onClick={() => setActiveTab('godown-stock')}
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${activeTab === 'godown-stock' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500 hover:text-neutral-700'}`}>
+              <Warehouse className="w-3 h-3" /> Godown Stock
+            </button>
+          </div>
+          {activeTab === 'products' && (
+            <>
+              <button onClick={handleExport} className="btn-secondary">
+                <Download className="w-4 h-4" /> Export
+              </button>
+              <button onClick={openAdd} className="btn-primary">
+                <Plus className="w-4 h-4" /> Add Product
+              </button>
+            </>
+          )}
         </div>
       </div>
 
       <div className="p-6 space-y-4">
-        <div className="grid grid-cols-3 gap-4">
+        {activeTab === 'godown-stock' && (
+          <div className="space-y-4">
+            <div className="card">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-neutral-800">Godown-wise Stock</h2>
+                  <p className="text-xs text-neutral-400 mt-0.5">Stock levels per product per warehouse</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                    <input value={godownStockSearch} onChange={e => setGodownStockSearch(e.target.value)} placeholder="Search product or godown..." className="input pl-8 w-56 text-xs" />
+                  </div>
+                  <button onClick={loadGodownStock} className="btn-secondary text-xs">Refresh</button>
+                </div>
+              </div>
+            </div>
+            <div className="card p-0 overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-neutral-50 border-b border-neutral-100">
+                  <tr>
+                    <th className="table-header text-left">Product</th>
+                    <th className="table-header text-left">Category</th>
+                    <th className="table-header text-left">Godown</th>
+                    <th className="table-header text-left">Location</th>
+                    <th className="table-header text-right">Qty in Stock</th>
+                    <th className="table-header text-right">Stock Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {godownStockLoading ? (
+                    <tr><td colSpan={6} className="table-cell text-center text-neutral-400 py-8 text-sm">Loading...</td></tr>
+                  ) : filteredGodownStock.length === 0 ? (
+                    <tr><td colSpan={6} className="py-12">
+                      <div className="flex flex-col items-center gap-2 text-neutral-400">
+                        <Warehouse className="w-8 h-8" />
+                        <p className="text-sm font-medium">No godown stock data found</p>
+                        <p className="text-xs">Stock will appear here once products are assigned to godowns</p>
+                      </div>
+                    </td></tr>
+                  ) : filteredGodownStock.map((gs, idx) => (
+                    <tr key={idx} className="border-b border-neutral-50 hover:bg-neutral-50 transition-colors">
+                      <td className="table-cell">
+                        <p className="font-medium text-neutral-800 text-sm">{gs.product?.name || '—'}</p>
+                        <p className="text-xs text-neutral-400">{gs.product?.sku || ''}</p>
+                      </td>
+                      <td className="table-cell">
+                        <span className={`badge text-[10px] font-semibold uppercase tracking-wider ${getCategoryColor(gs.product?.category || '')}`}>
+                          {gs.product?.category || '—'}
+                        </span>
+                      </td>
+                      <td className="table-cell">
+                        <p className="text-sm font-medium text-neutral-700">{gs.godown?.name || '—'}</p>
+                        {gs.godown?.code && <p className="text-xs text-neutral-400">{gs.godown.code}</p>}
+                      </td>
+                      <td className="table-cell text-xs text-neutral-500">{gs.godown?.location || '—'}</td>
+                      <td className="table-cell text-right">
+                        <span className={`text-sm font-semibold ${gs.quantity <= 0 ? 'text-error-600' : gs.quantity <= (gs.product?.low_stock_alert || 5) ? 'text-warning-600' : 'text-neutral-800'}`}>
+                          {gs.quantity} {gs.product?.unit || ''}
+                        </span>
+                        {gs.quantity <= 0 && <p className="text-[10px] text-error-500 text-right">Out of stock</p>}
+                        {gs.quantity > 0 && gs.quantity <= (gs.product?.low_stock_alert || 5) && (
+                          <p className="text-[10px] text-warning-500 text-right">Low stock</p>
+                        )}
+                      </td>
+                      <td className="table-cell text-right">
+                        {isAdmin && gs.product ? (
+                          <span className="text-sm font-medium text-neutral-700">{formatCurrency(gs.quantity * gs.product.purchase_price)}</span>
+                        ) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {activeTab === 'products' && <><div className="grid grid-cols-3 gap-4">
           <div className="col-span-2 card">
             <div className="flex items-center gap-6 flex-wrap">
               <div>
@@ -383,6 +500,7 @@ export default function Inventory() {
             </div>
           </div>
         )}
+        </>}
       </div>
 
       <Modal

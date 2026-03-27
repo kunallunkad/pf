@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Search, FileText, ChevronDown, ChevronRight, Receipt, Truck, Download, Eye, Pencil, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, Search, FileText, ChevronDown, ChevronRight, Receipt, Truck, Download, Eye, Pencil, Trash2, Printer, Send } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDate, generateId, exportToCSV } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
@@ -7,6 +7,7 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import EmptyState from '../../components/ui/EmptyState';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { useDateRange } from '../../contexts/DateRangeContext';
+import { getSmartRate } from '../../lib/rateCardService';
 import type { SalesOrder, SalesOrderItem, Product, Customer } from '../../types';
 import type { ActivePage } from '../../types';
 
@@ -79,7 +80,7 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
   const addItem = () => setItems(prev => [...prev, { product_id: '', product_name: '', unit: 'pcs', quantity: '1', unit_price: '', discount_pct: '0', total_price: 0 }]);
   const removeItem = (i: number) => setItems(prev => prev.filter((_, idx) => idx !== i));
 
-  const updateItem = (i: number, field: string, value: string) => {
+  const updateItem = async (i: number, field: string, value: string) => {
     setItems(prev => {
       const next = [...prev];
       next[i] = { ...next[i], [field]: value };
@@ -93,6 +94,23 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
       next[i].total_price = qty * price * (1 - disc / 100);
       return next;
     });
+
+    if (field === 'product_id' && value && form.customer_id) {
+      const product = products.find(p => p.id === value);
+      if (product) {
+        const smartRate = await getSmartRate(form.customer_id, value, product.selling_price);
+        if (smartRate !== product.selling_price) {
+          setItems(prev => {
+            const next = [...prev];
+            next[i] = { ...next[i], unit_price: String(smartRate) };
+            const qty = parseFloat(next[i].quantity) || 0;
+            const disc = parseFloat(next[i].discount_pct) || 0;
+            next[i].total_price = qty * smartRate * (1 - disc / 100);
+            return next;
+          });
+        }
+      }
+    }
   };
 
   const getStockForItem = (item: LineItem): number | null => {
@@ -501,7 +519,7 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
                             </button>
                           </>
                         )}
-                        <button onClick={() => openView(o)} title="View" className="p-1.5 rounded-lg text-neutral-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"><Eye className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => openView(o)} title="View / Print Proforma" className="p-1.5 rounded-lg text-neutral-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"><Eye className="w-3.5 h-3.5" /></button>
                         {(o.status === 'confirmed' || o.status === 'draft') && (
                           <button onClick={() => openEdit(o)} title="Edit" className="p-1.5 rounded-lg text-neutral-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
                         )}
@@ -674,7 +692,27 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
 
       <Modal isOpen={showViewModal} onClose={() => { setShowViewModal(false); setViewOrder(null); }} title={viewOrder ? `Sales Order — ${viewOrder.so_number}` : ''} size="xl"
         footer={
-          <button onClick={() => { setShowViewModal(false); setViewOrder(null); }} className="btn-secondary">Close</button>
+          <div className="flex items-center gap-3">
+            <button onClick={() => { setShowViewModal(false); setViewOrder(null); }} className="btn-secondary">Close</button>
+            {viewOrder && (
+              <button onClick={() => {
+                setShowViewModal(false);
+                window.setTimeout(() => {
+                  const printContent = document.getElementById(`proforma-${viewOrder.id}`);
+                  if (printContent) {
+                    const w = window.open('', '_blank');
+                    if (w) {
+                      w.document.write(`<html><head><title>Proforma Invoice - ${viewOrder.so_number}</title><style>body{font-family:sans-serif;padding:20px;color:#333}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f5f5f5}h2{margin:0}.header{display:flex;justify-content:space-between;margin-bottom:20px}.label{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.5px}.value{font-size:13px;font-weight:600}.badge{background:#e8f4fd;color:#1565c0;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}.total-section{margin-top:16px;text-align:right}.total{font-size:16px;font-weight:700}.footer{margin-top:24px;padding-top:12px;border-top:1px solid #eee;text-align:center;color:#666;font-size:11px}</style></head><body>${printContent.innerHTML}</body></html>`);
+                      w.document.close();
+                      w.print();
+                    }
+                  }
+                }, 100);
+              }} className="btn-primary flex items-center gap-1.5">
+                <Printer className="w-3.5 h-3.5" /> Print Proforma
+              </button>
+            )}
+          </div>
         }>
         {viewOrder && (
           <div className="space-y-4">
@@ -763,6 +801,63 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
                 <p className="text-sm text-neutral-600 italic">{viewOrder.notes}</p>
               </div>
             )}
+
+            <div id={`proforma-${viewOrder.id}`} style={{ display: 'none' }}>
+              <div className="header">
+                <div>
+                  <h2 style={{ fontSize: 22, fontWeight: 700, color: '#1a1a1a' }}>PROFORMA INVOICE</h2>
+                  <p style={{ color: '#666', fontSize: 13 }}>{viewOrder.so_number}</p>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <p className="label">Date</p>
+                  <p className="value">{formatDate(viewOrder.so_date)}</p>
+                  {viewOrder.delivery_date && <>
+                    <p className="label" style={{ marginTop: 6 }}>Expected Delivery</p>
+                    <p className="value">{formatDate(viewOrder.delivery_date)}</p>
+                  </>}
+                </div>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <p className="label">Bill To</p>
+                <p className="value">{viewOrder.customer_name}</p>
+                {viewOrder.customer_phone && <p style={{ fontSize: 12, color: '#555' }}>{viewOrder.customer_phone}</p>}
+                {viewOrder.customer_address && <p style={{ fontSize: 12, color: '#555' }}>{viewOrder.customer_address}{viewOrder.customer_city ? `, ${viewOrder.customer_city}` : ''}</p>}
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Product</th>
+                    <th style={{ textAlign: 'right' }}>Qty</th>
+                    <th style={{ textAlign: 'right' }}>Unit Price</th>
+                    <th style={{ textAlign: 'right' }}>Disc%</th>
+                    <th style={{ textAlign: 'right' }}>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {viewItems.map((item, idx) => (
+                    <tr key={idx}>
+                      <td>{idx + 1}</td>
+                      <td>{item.product_name}</td>
+                      <td style={{ textAlign: 'right' }}>{item.quantity} {item.unit}</td>
+                      <td style={{ textAlign: 'right' }}>{formatCurrency(item.unit_price)}</td>
+                      <td style={{ textAlign: 'right' }}>{item.discount_pct}%</td>
+                      <td style={{ textAlign: 'right' }}>{formatCurrency(item.total_price)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="total-section">
+                <p>Subtotal: {formatCurrency(viewOrder.subtotal)}</p>
+                {(viewOrder.courier_charges || 0) > 0 && <p>Courier: {formatCurrency(viewOrder.courier_charges || 0)}</p>}
+                {(viewOrder.discount_amount || 0) > 0 && <p>Discount: -{formatCurrency(viewOrder.discount_amount || 0)}</p>}
+                <p className="total">TOTAL: {formatCurrency(viewOrder.total_amount)}</p>
+              </div>
+              {viewOrder.notes && <p style={{ marginTop: 16, color: '#555', fontSize: 12 }}>Notes: {viewOrder.notes}</p>}
+              <div className="footer">
+                <p>This is a Proforma Invoice and not a tax invoice. Subject to change until final invoice is issued.</p>
+              </div>
+            </div>
           </div>
         )}
       </Modal>

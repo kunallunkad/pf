@@ -2,9 +2,11 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 
+export type UserRole = 'admin' | 'staff' | 'accountant' | 'user';
+
 interface UserProfile {
   id: string;
-  role: 'admin' | 'user';
+  role: UserRole;
   display_name: string;
   email: string;
 }
@@ -14,9 +16,14 @@ interface AuthContextType {
   session: Session | null;
   profile: UserProfile | null;
   isAdmin: boolean;
+  isAccountant: boolean;
+  isStaff: boolean;
+  canAccessFinance: boolean;
+  canAccessInventory: boolean;
+  canAccessSales: boolean;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
-  signUp: (email: string, password: string, displayName: string, role: 'admin' | 'user') => Promise<{ error: string | null }>;
+  signUp: (email: string, password: string, displayName: string, role: UserRole) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -64,7 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: error?.message ?? null };
   };
 
-  const signUp = async (email: string, password: string, displayName: string, role: 'admin' | 'user') => {
+  const signUp = async (email: string, password: string, displayName: string, role: UserRole) => {
     const { data, error } = await supabase.auth.signUp({
       email, password,
       options: { data: { display_name: displayName, role } },
@@ -82,10 +89,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut();
   };
 
+  const role = profile?.role ?? 'staff';
+  const isAdmin = role === 'admin';
+  const isAccountant = role === 'accountant';
+  const isStaff = role === 'staff' || role === 'user';
+
   return (
     <AuthContext.Provider value={{
       user, session, profile,
-      isAdmin: profile?.role === 'admin',
+      isAdmin,
+      isAccountant,
+      isStaff,
+      canAccessFinance: isAdmin || isAccountant,
+      canAccessInventory: isAdmin || isStaff,
+      canAccessSales: isAdmin || isStaff,
       loading, signIn, signUp, signOut,
     }}>
       {children}

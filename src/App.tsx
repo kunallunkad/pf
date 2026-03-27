@@ -6,6 +6,8 @@ import Sidebar from './components/layout/Sidebar';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
+import Godowns from './pages/Godowns';
+import Dispatch from './pages/Dispatch';
 import Purchase from './pages/Purchase';
 import SalesOrders from './pages/sales/SalesOrders';
 import Invoices from './pages/sales/Invoices';
@@ -23,7 +25,7 @@ import CompanySettings from './pages/CompanySettings';
 import type { ActivePage } from './types';
 
 function AppShell() {
-  const { user, loading, isAdmin } = useAuth();
+  const { user, loading, isAdmin, canAccessFinance, canAccessSales, canAccessInventory } = useAuth();
   const [activePage, setActivePage] = useState<ActivePage>('dashboard');
 
   if (loading) {
@@ -44,22 +46,30 @@ function AppShell() {
   const renderPage = () => {
     switch (activePage) {
       case 'dashboard': return <Dashboard onNavigate={navigate} />;
-      case 'inventory': return <Inventory />;
-      case 'purchase': return isAdmin ? <Purchase /> : <Dashboard onNavigate={navigate} />;
-      case 'sales-orders': return <SalesOrders onNavigate={navigate} />;
-      case 'invoices': return <Invoices />;
-      case 'challans': return <DeliveryChallan />;
-      case 'sales-returns': return <SalesReturns />;
+
       case 'crm': return <CRM />;
       case 'calendar': return <CalendarPage />;
-      case 'finance': return isAdmin ? <Ledger /> : <Reports />;
-      case 'ledger': return isAdmin ? <Ledger /> : <Reports />;
-      case 'expenses': return isAdmin ? <Expenses /> : <Reports />;
-      case 'journal': return isAdmin ? <Journal /> : <Reports />;
+
+      case 'sales-orders': return canAccessSales ? <SalesOrders onNavigate={navigate} /> : <Dashboard onNavigate={navigate} />;
+      case 'invoices': return canAccessSales ? <Invoices /> : <Dashboard onNavigate={navigate} />;
+      case 'challans': return canAccessSales ? <DeliveryChallan /> : <Dashboard onNavigate={navigate} />;
+      case 'dispatch': return canAccessSales ? <Dispatch /> : <Dashboard onNavigate={navigate} />;
+      case 'sales-returns': return canAccessSales ? <SalesReturns /> : <Dashboard onNavigate={navigate} />;
+
+      case 'inventory': return canAccessInventory ? <Inventory /> : <Dashboard onNavigate={navigate} />;
+      case 'godowns': return canAccessInventory ? <Godowns /> : <Dashboard onNavigate={navigate} />;
+      case 'purchase': return isAdmin ? <Purchase /> : <Dashboard onNavigate={navigate} />;
+
+      case 'finance':
+      case 'ledger': return canAccessFinance ? <Ledger /> : <Dashboard onNavigate={navigate} />;
+      case 'expenses': return canAccessFinance ? <Expenses /> : <Dashboard onNavigate={navigate} />;
+      case 'journal': return canAccessFinance ? <Journal /> : <Dashboard onNavigate={navigate} />;
+
       case 'courier': return <Courier />;
       case 'reports': return <Reports />;
       case 'automation': return isAdmin ? <Automation /> : <Dashboard onNavigate={navigate} />;
       case 'company-settings': return isAdmin ? <CompanySettings /> : <Dashboard onNavigate={navigate} />;
+
       default: return <Dashboard onNavigate={navigate} />;
     }
   };

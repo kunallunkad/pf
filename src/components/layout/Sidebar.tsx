@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import { LayoutDashboard, Package, ShoppingCart, FileText, Users, BarChart2, Truck, BookOpen, Receipt, Zap, LogOut, Moon, RotateCcw, Building2, CalendarDays, CircleUser as UserCircle2, Settings } from 'lucide-react';
+import {
+  LayoutDashboard, Package, ShoppingCart, FileText, BarChart2,
+  Truck, BookOpen, Receipt, Zap, LogOut, Moon, RotateCcw,
+  CalendarDays, CircleUser as UserCircle2, Settings, Warehouse, Send,
+  CreditCard
+} from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import type { ActivePage } from '../../types';
@@ -10,66 +15,34 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
-  const { profile, isAdmin, signOut } = useAuth();
+  const { profile, isAdmin, canAccessFinance, canAccessSales, canAccessInventory, signOut } = useAuth();
   const [unpaidInvoices, setUnpaidInvoices] = useState(0);
-  const [pendingCouriers, setPendingCouriers] = useState(0);
+  const [pendingDispatches, setPendingDispatches] = useState(0);
 
   useEffect(() => {
     const loadBadges = async () => {
-      const [invoiceRes, courierRes] = await Promise.all([
+      const [invoiceRes, dispatchRes] = await Promise.all([
         supabase.from('invoices').select('id', { count: 'exact', head: true }).in('status', ['sent', 'partial', 'overdue']),
-        supabase.from('courier_entries').select('id', { count: 'exact', head: true }).in('status', ['booked', 'in_transit']),
+        supabase.from('dispatch_entries').select('id', { count: 'exact', head: true }).in('status', ['pending', 'dispatched', 'in_transit']),
       ]);
       setUnpaidInvoices(invoiceRes.count || 0);
-      setPendingCouriers(courierRes.count || 0);
+      setPendingDispatches(dispatchRes.count || 0);
     };
     loadBadges();
   }, []);
 
-  const masterNav = [
-    { id: 'inventory' as ActivePage, label: 'Products', icon: Package },
-    ...(isAdmin ? [{ id: 'purchase' as ActivePage, label: 'Suppliers', icon: Building2 }] : []),
-    ...(isAdmin ? [{ id: 'company-settings' as ActivePage, label: 'Company Details', icon: Settings }] : []),
-  ];
-
-  const crmNav = [
-    { id: 'crm' as ActivePage, label: 'Clients', icon: UserCircle2 },
-    { id: 'calendar' as ActivePage, label: 'Schedule', icon: CalendarDays },
-  ];
-
-  const operationsNav = [
-    { id: 'sales-orders' as ActivePage, label: 'Sales Orders', icon: FileText },
-    { id: 'challans' as ActivePage, label: 'Delivery Challans', icon: Truck },
-    { id: 'invoices' as ActivePage, label: 'Invoices', icon: Receipt, badge: unpaidInvoices },
-    { id: 'sales-returns' as ActivePage, label: 'Returns', icon: RotateCcw },
-    ...(isAdmin ? [{ id: 'purchase' as ActivePage, label: 'Purchase', icon: ShoppingCart }] : []),
-  ];
-
-  const financeNav = isAdmin ? [
-    { id: 'ledger' as ActivePage, label: 'Ledger', icon: BookOpen },
-    { id: 'expenses' as ActivePage, label: 'Expenses', icon: Receipt },
-    { id: 'journal' as ActivePage, label: 'Journal', icon: FileText },
-  ] : [];
-
-  const logisticsNav = [
-    { id: 'courier' as ActivePage, label: 'Courier', icon: Truck, badge: pendingCouriers },
-  ];
-
-  const analyticsNav = [
-    { id: 'reports' as ActivePage, label: 'Reports', icon: BarChart2 },
-    ...(isAdmin ? [{ id: 'automation' as ActivePage, label: 'Automation', icon: Zap }] : []),
-  ];
+  const roleLabel = () => {
+    const r = profile?.role;
+    if (r === 'admin') return 'Administrator';
+    if (r === 'accountant') return 'Accountant';
+    if (r === 'staff') return 'Staff';
+    return 'User';
+  };
 
   const NavItem = ({
-    id,
-    label,
-    icon: Icon,
-    badge,
+    id, label, icon: Icon, badge,
   }: {
-    id: ActivePage;
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-    badge?: number;
+    id: ActivePage; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number;
   }) => {
     const isActive = activePage === id;
     return (
@@ -107,44 +80,71 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
         </div>
       </div>
 
-      <nav className="flex-1 px-2 py-1.5 overflow-y-auto">
+      <nav className="flex-1 px-2 py-1.5 overflow-y-auto space-y-0">
         <div className="space-y-0.5">
           <NavItem id="dashboard" label="Dashboard" icon={LayoutDashboard} />
         </div>
 
         <SectionLabel label="CRM" />
         <div className="space-y-0.5">
-          {crmNav.map(item => <NavItem key={item.id} {...item} />)}
+          <NavItem id="crm" label="Clients" icon={UserCircle2} />
+          <NavItem id="calendar" label="Schedule" icon={CalendarDays} />
         </div>
 
-        <SectionLabel label="Master Data" />
-        <div className="space-y-0.5">
-          {masterNav.map(item => <NavItem key={item.id + item.label} {...item} />)}
-        </div>
+        {canAccessSales && (
+          <>
+            <SectionLabel label="Sales Flow" />
+            <div className="space-y-0.5">
+              <NavItem id="sales-orders" label="Sales Orders" icon={FileText} />
+              <NavItem id="dispatch" label="Dispatch" icon={Send} badge={pendingDispatches} />
+              <NavItem id="invoices" label="Invoices" icon={Receipt} badge={unpaidInvoices} />
+              <NavItem id="challans" label="Delivery Challans" icon={Truck} />
+              <NavItem id="sales-returns" label="Returns" icon={RotateCcw} />
+            </div>
+          </>
+        )}
 
-        <SectionLabel label="Operations" />
-        <div className="space-y-0.5">
-          {operationsNav.filter((v, i, a) => a.findIndex(t => t.id === v.id && t.label === v.label) === i).map(item => <NavItem key={item.id + item.label} {...item} />)}
-        </div>
+        {canAccessInventory && (
+          <>
+            <SectionLabel label="Inventory" />
+            <div className="space-y-0.5">
+              <NavItem id="inventory" label="Products" icon={Package} />
+              <NavItem id="godowns" label="Godowns" icon={Warehouse} />
+              {isAdmin && <NavItem id="purchase" label="Purchase" icon={ShoppingCart} />}
+            </div>
+          </>
+        )}
 
-        {isAdmin && financeNav.length > 0 && (
+        {canAccessFinance && (
           <>
             <SectionLabel label="Finance" />
             <div className="space-y-0.5">
-              {financeNav.map(item => <NavItem key={item.id + item.label} {...item} />)}
+              <NavItem id="ledger" label="Ledger" icon={BookOpen} />
+              <NavItem id="expenses" label="Expenses" icon={CreditCard} />
+              <NavItem id="journal" label="Journal" icon={FileText} />
             </div>
           </>
         )}
 
         <SectionLabel label="Logistics" />
         <div className="space-y-0.5">
-          {logisticsNav.map(item => <NavItem key={item.id} {...item} />)}
+          <NavItem id="courier" label="Courier" icon={Truck} />
         </div>
 
         <SectionLabel label="Analytics" />
         <div className="space-y-0.5">
-          {analyticsNav.map(item => <NavItem key={item.id} {...item} />)}
+          <NavItem id="reports" label="Reports" icon={BarChart2} />
+          {isAdmin && <NavItem id="automation" label="Automation" icon={Zap} />}
         </div>
+
+        {isAdmin && (
+          <>
+            <SectionLabel label="Admin" />
+            <div className="space-y-0.5">
+              <NavItem id="company-settings" label="Company" icon={Settings} />
+            </div>
+          </>
+        )}
       </nav>
 
       <div className="p-2 border-t border-neutral-100">
@@ -156,8 +156,8 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[10px] font-semibold text-neutral-800 truncate leading-tight">{profile?.display_name || profile?.email || 'User'}</p>
-            <p className={`text-[9px] capitalize leading-tight ${isAdmin ? 'text-primary-600' : 'text-neutral-400'}`}>
-              {isAdmin ? 'Administrator' : 'Staff'}
+            <p className={`text-[9px] leading-tight ${isAdmin ? 'text-primary-600' : 'text-neutral-400'}`}>
+              {roleLabel()}
             </p>
           </div>
         </div>

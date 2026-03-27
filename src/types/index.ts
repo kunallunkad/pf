@@ -43,6 +43,7 @@ export interface StockMovement {
   reference_type?: string;
   reference_id?: string;
   reference_number?: string;
+  godown_id?: string;
   notes?: string;
   created_at: string;
 }
@@ -409,10 +410,127 @@ export interface AutomationRule {
 
 export interface UserProfile {
   id: string;
-  role: 'admin' | 'user';
+  role: 'admin' | 'staff' | 'accountant' | 'user';
   display_name: string;
   email: string;
   created_at: string;
+}
+
+export interface Godown {
+  id: string;
+  code?: string;
+  name: string;
+  location?: string;
+  manager_name?: string;
+  phone?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GodownStock {
+  id?: string;
+  godown_id: string;
+  product_id: string;
+  quantity: number;
+  updated_at: string;
+  godown?: {
+    id: string;
+    name: string;
+    code?: string;
+    location?: string;
+  };
+  product?: {
+    id: string;
+    name: string;
+    sku: string;
+    unit: string;
+    category?: string;
+    low_stock_alert: number;
+    selling_price: number;
+    purchase_price: number;
+  };
+}
+
+export interface DispatchEntry {
+  id: string;
+  dispatch_number: string;
+  sales_order_id?: string;
+  invoice_id?: string;
+  reference_type?: string;
+  customer_id?: string;
+  customer_name?: string;
+  mode?: string;
+  dispatch_mode?: string;
+  transport_name?: string;
+  lr_number?: string;
+  dispatch_date: string;
+  expected_delivery_date?: string;
+  actual_delivery?: string;
+  notes?: string;
+  status: 'pending' | 'dispatched' | 'in_transit' | 'delivered' | 'returned';
+  godown_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Dispatch {
+  id: string;
+  dispatch_number: string;
+  sales_order_id?: string;
+  invoice_id?: string;
+  customer_id?: string;
+  customer_name: string;
+  dispatch_date: string;
+  mode: 'Bus' | 'Tempo' | 'Courier' | 'Hand Delivery' | 'Train' | 'Air';
+  transport_name?: string;
+  tracking_number?: string;
+  notes?: string;
+  status: 'dispatched' | 'delivered' | 'returned';
+  created_at: string;
+  sales_order?: { so_number: string };
+  invoice?: { invoice_number: string };
+}
+
+export interface CustomerRate {
+  id: string;
+  customer_id: string;
+  product_id: string;
+  rate: number;
+  updated_at: string;
+}
+
+export interface CustomerLastRate {
+  customer_id: string;
+  product_id: string;
+  rate: number;
+  last_used_at: string;
+  reference_type?: string;
+  reference_id?: string;
+}
+
+export interface CustomerRateCard {
+  id: string;
+  customer_id: string;
+  product_id: string;
+  rate: number;
+  effective_from?: string;
+  effective_to?: string;
+  is_active: boolean;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+  products?: { name: string; sku: string; selling_price: number };
+}
+
+export interface CustomerLastRate {
+  id: string;
+  customer_id: string;
+  product_id: string;
+  last_rate: number;
+  last_used_at: string;
+  reference_type?: string;
+  reference_id?: string;
 }
 
 export interface SalesReturn {
@@ -446,11 +564,13 @@ export interface SalesReturnItem {
 export type ActivePage =
   | 'dashboard'
   | 'inventory'
+  | 'godowns'
   | 'purchase'
   | 'sales'
   | 'sales-orders'
   | 'invoices'
   | 'challans'
+  | 'dispatch'
   | 'sales-returns'
   | 'crm'
   | 'calendar'

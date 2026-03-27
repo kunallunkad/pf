@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Search, CreditCard, FileText, Download, Printer, Pencil, Trash2, Eye } from 'lucide-react';
+import { Plus, Search, CreditCard, FileText, Download, Printer, Pencil, Trash2, Eye, Send } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDate, formatDateInput, generateId, exportToCSV } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
@@ -8,6 +8,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import InvoicePrint from './InvoicePrint';
 import { useDateRange } from '../../contexts/DateRangeContext';
+import { getSmartRate, updateLastRate } from '../../lib/rateCardService';
 import type { Invoice, Product, Customer, SalesOrder } from '../../types';
 
 interface LineItem {
@@ -169,7 +170,7 @@ export default function Invoices() {
   const addItem = () => setItems(prev => [...prev, { product_id: '', product_name: '', description: '', unit: 'pcs', quantity: '1', unit_price: '', discount_pct: '0', tax_pct: '0', total_price: 0 }]);
   const removeItem = (i: number) => setItems(prev => prev.filter((_, idx) => idx !== i));
 
-  const updateItem = (i: number, field: string, value: string) => {
+  const updateItem = async (i: number, field: string, value: string) => {
     setItems(prev => {
       const next = [...prev];
       next[i] = { ...next[i], [field]: value };
@@ -185,6 +186,25 @@ export default function Invoices() {
       next[i].total_price = afterDisc * (1 + tax / 100);
       return next;
     });
+
+    if (field === 'product_id' && value && form.customer_id) {
+      const product = products.find(p => p.id === value);
+      if (product) {
+        const smartRate = await getSmartRate(form.customer_id, value, product.selling_price);
+        if (smartRate !== product.selling_price) {
+          setItems(prev => {
+            const next = [...prev];
+            next[i] = { ...next[i], unit_price: String(smartRate) };
+            const qty = parseFloat(next[i].quantity) || 0;
+            const disc = parseFloat(next[i].discount_pct) || 0;
+            const tax = parseFloat(next[i].tax_pct) || 0;
+            const afterDisc = qty * smartRate * (1 - disc / 100);
+            next[i].total_price = afterDisc * (1 + tax / 100);
+            return next;
+          });
+        }
+      }
+    }
   };
 
   const addEditItem = () => setEditItems(prev => [...prev, { product_id: '', product_name: '', description: '', unit: 'pcs', quantity: '1', unit_price: '', discount_pct: '0', tax_pct: '0', total_price: 0 }]);
@@ -273,6 +293,7 @@ export default function Invoices() {
       for (const item of validItems) {
         if (item.product_id) {
           const qty = parseFloat(item.quantity) || 0;
+          const rate = parseFloat(item.unit_price) || 0;
           await supabase.from('stock_movements').insert({
             product_id: item.product_id,
             movement_type: 'out',
@@ -291,6 +312,9 @@ export default function Invoices() {
               .from('products')
               .update({ stock_quantity: (prod.stock_quantity || 0) - qty })
               .eq('id', item.product_id);
+          }
+          if (form.customer_id && rate > 0) {
+            await updateLastRate(form.customer_id, item.product_id, rate, 'invoice', inv.id);
           }
         }
       }
