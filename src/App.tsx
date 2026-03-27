@@ -7,7 +7,6 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
 import Godowns from './pages/Godowns';
-import Dispatch from './pages/Dispatch';
 import Purchase from './pages/Purchase';
 import SalesOrders from './pages/sales/SalesOrders';
 import Invoices from './pages/sales/Invoices';
@@ -53,7 +52,7 @@ function AppShell() {
       case 'sales-orders': return canAccessSales ? <SalesOrders onNavigate={navigate} /> : <Dashboard onNavigate={navigate} />;
       case 'invoices': return canAccessSales ? <Invoices /> : <Dashboard onNavigate={navigate} />;
       case 'challans': return canAccessSales ? <DeliveryChallan /> : <Dashboard onNavigate={navigate} />;
-      case 'dispatch': return canAccessSales ? <Dispatch /> : <Dashboard onNavigate={navigate} />;
+      case 'dispatch': return <Courier />;
       case 'sales-returns': return canAccessSales ? <SalesReturns /> : <Dashboard onNavigate={navigate} />;
 
       case 'inventory': return canAccessInventory ? <Inventory /> : <Dashboard onNavigate={navigate} />;

@@ -23,7 +23,7 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
     const loadBadges = async () => {
       const [invoiceRes, dispatchRes] = await Promise.all([
         supabase.from('invoices').select('id', { count: 'exact', head: true }).in('status', ['sent', 'partial', 'overdue']),
-        supabase.from('dispatch_entries').select('id', { count: 'exact', head: true }).in('status', ['pending', 'dispatched', 'in_transit']),
+        supabase.from('courier_entries').select('id', { count: 'exact', head: true }).in('status', ['booked', 'in_transit']),
       ]);
       setUnpaidInvoices(invoiceRes.count || 0);
       setPendingDispatches(dispatchRes.count || 0);
@@ -96,7 +96,6 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
             <SectionLabel label="Sales Flow" />
             <div className="space-y-0.5">
               <NavItem id="sales-orders" label="Sales Orders" icon={FileText} />
-              <NavItem id="dispatch" label="Dispatch" icon={Send} badge={pendingDispatches} />
               <NavItem id="invoices" label="Invoices" icon={Receipt} badge={unpaidInvoices} />
               <NavItem id="challans" label="Delivery Challans" icon={Truck} />
               <NavItem id="sales-returns" label="Returns" icon={RotateCcw} />
@@ -128,7 +127,7 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
 
         <SectionLabel label="Logistics" />
         <div className="space-y-0.5">
-          <NavItem id="courier" label="Courier" icon={Truck} />
+          <NavItem id="courier" label="Shipments" icon={Truck} badge={pendingDispatches} />
         </div>
 
         <SectionLabel label="Analytics" />
