@@ -138,13 +138,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       detail: 'Sales orders ready for dispatch',
       action: () => onNavigate('sales-orders'),
     }] : []),
-    ...lowStockItems.map(p => ({
-      type: 'stock' as const,
-      priority: 'low' as const,
-      label: `Low stock: ${p.name}`,
-      detail: `${p.stock_quantity} left (alert: ${p.low_stock_alert})`,
-      action: () => onNavigate('inventory'),
-    })),
   ];
 
   const actionTypeIcon = (type: string) => {
@@ -274,31 +267,71 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               </div>
             )}
 
-            {todayAppts.length > 0 && (
-              <div className="card">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-sm font-semibold text-neutral-800">Today's Schedule</p>
-                  <button onClick={() => onNavigate('calendar')} className="text-xs text-primary-600 hover:underline flex items-center gap-1">
-                    Full Calendar <ArrowRight className="w-3 h-3" />
-                  </button>
+            <div className="card">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-sm font-semibold text-neutral-800 flex items-center gap-2">
+                    <CalendarDays className="w-4 h-4 text-primary-500" />
+                    Today's Schedule
+                  </p>
+                  <p className="text-[10px] text-neutral-400 mt-0.5">
+                    {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
+                  </p>
                 </div>
-                <div className="space-y-2">
-                  {todayAppts.map(a => (
-                    <div key={a.id} className={`flex items-center gap-3 p-3 rounded-xl border ${APPT_COLORS[a.appointment_type] || 'bg-blue-50 border-blue-200'}`}>
-                      <Clock className="w-4 h-4 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold truncate">{a.title}</p>
-                        {a.customer_name && <p className="text-xs opacity-75">{a.customer_name}</p>}
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className="text-xs font-medium">{formatTime(a.start_time)}</p>
-                        <p className="text-[10px] opacity-60">{a.appointment_type}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <button onClick={() => onNavigate('calendar')} className="text-xs text-primary-600 hover:underline flex items-center gap-1">
+                  Full Calendar <ArrowRight className="w-3 h-3" />
+                </button>
               </div>
-            )}
+              {todayAppts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-neutral-300">
+                  <CalendarDays className="w-10 h-10 mb-2" />
+                  <p className="text-xs text-neutral-400">No appointments today</p>
+                  <button onClick={() => onNavigate('calendar')} className="mt-2 text-xs text-primary-500 hover:underline">Add to schedule</button>
+                </div>
+              ) : (
+                <div className="relative">
+                  <div className="absolute left-[52px] top-0 bottom-0 w-px bg-neutral-100" />
+                  <div className="space-y-1">
+                    {todayAppts.map((a, idx) => {
+                      const startTime = formatTime(a.start_time);
+                      const endTime = a.end_time ? formatTime(a.end_time) : null;
+                      const colorClass = APPT_COLORS[a.appointment_type] || 'bg-blue-50 text-blue-700 border-blue-200';
+                      const dotColors: Record<string, string> = {
+                        'Astro Reading': 'bg-primary-500',
+                        'Vastu Audit': 'bg-accent-500',
+                        'Consultation': 'bg-blue-500',
+                        'Follow Up': 'bg-green-500',
+                        'Site Visit': 'bg-orange-500',
+                        'Video Call': 'bg-teal-500',
+                        'Phone Call': 'bg-neutral-400',
+                      };
+                      const dotColor = dotColors[a.appointment_type] || 'bg-blue-500';
+                      return (
+                        <div key={a.id} className={`flex items-stretch gap-0 ${idx < todayAppts.length - 1 ? 'pb-1' : ''}`}>
+                          <div className="w-[52px] shrink-0 flex flex-col items-end pr-3 pt-2">
+                            <span className="text-[10px] font-semibold text-neutral-500 leading-none whitespace-nowrap">{startTime}</span>
+                            {endTime && <span className="text-[9px] text-neutral-300 leading-none mt-0.5 whitespace-nowrap">{endTime}</span>}
+                          </div>
+                          <div className="flex items-start pt-2.5 mr-3 shrink-0 relative z-10">
+                            <div className={`w-2.5 h-2.5 rounded-full border-2 border-white shadow-sm ${dotColor}`} />
+                          </div>
+                          <div className={`flex-1 rounded-xl border px-3 py-2.5 mb-1 ${colorClass}`}>
+                            <p className="text-xs font-semibold leading-tight truncate">{a.title}</p>
+                            {a.customer_name && (
+                              <p className="text-[10px] opacity-75 mt-0.5 truncate">{a.customer_name}</p>
+                            )}
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-[9px] font-medium opacity-60 uppercase tracking-wide">{a.appointment_type}</span>
+                              {a.location && <span className="text-[9px] opacity-50">· {a.location}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div className="card">
               <div className="flex items-center justify-between mb-4">
