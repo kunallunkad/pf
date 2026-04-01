@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Warehouse, Plus, CreditCard as Edit2, Trash2, Package, AlertTriangle, Search, BarChart2, Phone, MapPin } from 'lucide-react';
+import { Warehouse, Plus, CreditCard as Edit2, Trash2, Package, AlertTriangle, Search, BarChart2, Phone, MapPin, RefreshCw, Hash, User, X, CheckCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { formatCurrency } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import type { Godown, GodownStock } from '../types';
-import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 
 interface GodownFormData {
@@ -16,6 +15,13 @@ interface GodownFormData {
 }
 
 const emptyForm: GodownFormData = { name: '', location: '', manager_name: '', phone: '', code: '' };
+
+interface AdjustState {
+  stockId: string;
+  productName: string;
+  currentQty: number;
+  newQty: string;
+}
 
 export default function Godowns() {
   const { isAdmin } = useAuth();
@@ -31,6 +37,9 @@ export default function Godowns() {
   const [form, setForm] = useState<GodownFormData>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [stockSearch, setStockSearch] = useState('');
+  const [adjusting, setAdjusting] = useState<AdjustState | null>(null);
+  const [adjustSaving, setAdjustSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => { loadGodowns(); }, []);
   useEffect(() => {
@@ -56,6 +65,26 @@ export default function Godowns() {
     setStockLoading(false);
   };
 
+  const handleSyncStock = async () => {
+    if (!selectedGodown) return;
+    setSyncing(true);
+    const { data: products } = await supabase
+      .from('products')
+      .select('id, stock_quantity')
+      .eq('is_active', true);
+
+    if (products && products.length > 0) {
+      const upserts = products.map((p: { id: string; stock_quantity: number }) => ({
+        godown_id: selectedGodown.id,
+        product_id: p.id,
+        quantity: p.stock_quantity,
+      }));
+      await supabase.from('godown_stock').upsert(upserts, { onConflict: 'godown_id,product_id' });
+    }
+    await loadGodownStock(selectedGodown.id);
+    setSyncing(false);
+  };
+
   const openAdd = () => {
     setEditing(null);
     setForm(emptyForm);
@@ -71,11 +100,21 @@ export default function Godowns() {
   const handleSave = async () => {
     if (!form.name.trim()) return;
     setSaving(true);
-    const payload = { name: form.name.trim(), location: form.location.trim(), manager_name: form.manager_name.trim(), phone: form.phone.trim(), code: form.code.trim(), updated_at: new Date().toISOString() };
+    const payload = {
+      name: form.name.trim(),
+      location: form.location.trim(),
+      manager_name: form.manager_name.trim(),
+      phone: form.phone.trim(),
+      code: form.code.trim(),
+      updated_at: new Date().toISOString(),
+    };
     if (editing) {
       await supabase.from('godowns').update(payload).eq('id', editing.id);
     } else {
-      await supabase.from('godowns').insert({ ...payload, is_active: true });
+      const { data } = await supabase.from('godowns').insert({ ...payload, is_active: true }).select().maybeSingle();
+      if (data) {
+        await handleSyncStock();
+      }
     }
     setSaving(false);
     setShowModal(false);
@@ -91,12 +130,25 @@ export default function Godowns() {
     await loadGodowns();
   };
 
+  const handleAdjustSave = async () => {
+    if (!adjusting || adjusting.newQty === '') return;
+    const qty = parseFloat(adjusting.newQty);
+    if (isNaN(qty) || qty < 0) return;
+    setAdjustSaving(true);
+    await supabase.from('godown_stock').update({ quantity: qty, updated_at: new Date().toISOString() }).eq('id', adjusting.stockId);
+    setAdjusting(null);
+    setAdjustSaving(false);
+    if (selectedGodown) await loadGodownStock(selectedGodown.id);
+  };
+
   const filteredStock = godownStock.filter(s =>
-    !stockSearch || s.products?.name.toLowerCase().includes(stockSearch.toLowerCase()) || s.products?.sku.toLowerCase().includes(stockSearch.toLowerCase())
+    !stockSearch ||
+    s.products?.name.toLowerCase().includes(stockSearch.toLowerCase()) ||
+    s.products?.sku?.toLowerCase().includes(stockSearch.toLowerCase())
   );
 
   const totalStockValue = godownStock.reduce((sum, s) => sum + (s.quantity * (s.products?.selling_price || 0)), 0);
-  const lowStockItems = godownStock.filter(s => s.products && s.quantity <= s.products.low_stock_alert).length;
+  const lowStockItems = godownStock.filter(s => s.products && s.quantity > 0 && s.quantity <= s.products.low_stock_alert).length;
   const outOfStockItems = godownStock.filter(s => s.quantity === 0).length;
 
   if (loading) {
@@ -111,7 +163,7 @@ export default function Godowns() {
     <div className="flex-1 flex overflow-hidden">
       <div className="w-64 bg-white border-r border-neutral-200 flex flex-col shrink-0">
         <div className="p-4 border-b border-neutral-100">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-1">
             <h2 className="text-sm font-bold text-neutral-800 flex items-center gap-2">
               <Warehouse className="w-4 h-4 text-primary-600" />
               Godowns
@@ -151,24 +203,36 @@ export default function Godowns() {
             <div className="flex items-start justify-between">
               <div>
                 <h1 className="text-xl font-bold text-neutral-900">{selectedGodown.name}</h1>
-                <div className="flex items-center gap-4 mt-1">
+                <div className="flex items-center gap-4 mt-1 flex-wrap">
                   {selectedGodown.location && (
                     <span className="flex items-center gap-1 text-xs text-neutral-500">
                       <MapPin className="w-3 h-3" /> {selectedGodown.location}
                     </span>
                   )}
                   {selectedGodown.manager_name && (
-                    <span className="text-xs text-neutral-500">Manager: {selectedGodown.manager_name}</span>
+                    <span className="flex items-center gap-1 text-xs text-neutral-500">
+                      <User className="w-3 h-3" /> {selectedGodown.manager_name}
+                    </span>
                   )}
                   {selectedGodown.phone && (
                     <span className="flex items-center gap-1 text-xs text-neutral-500">
                       <Phone className="w-3 h-3" /> {selectedGodown.phone}
                     </span>
                   )}
+                  {selectedGodown.code && (
+                    <span className="flex items-center gap-1 text-xs text-neutral-400">
+                      <Hash className="w-3 h-3" /> {selectedGodown.code}
+                    </span>
+                  )}
                 </div>
               </div>
               {isAdmin && (
                 <div className="flex items-center gap-2">
+                  <button onClick={handleSyncStock} disabled={syncing}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-50">
+                    <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
+                    {syncing ? 'Syncing...' : 'Sync Stock'}
+                  </button>
                   <button onClick={() => openEdit(selectedGodown)} className="btn-secondary flex items-center gap-1.5 text-xs">
                     <Edit2 className="w-3 h-3" /> Edit
                   </button>
@@ -200,14 +264,14 @@ export default function Godowns() {
                   <AlertTriangle className="w-4 h-4 text-warning-600" />
                   <p className="text-xs text-neutral-500">Low Stock</p>
                 </div>
-                <p className="text-2xl font-bold text-warning-600">{lowStockItems}</p>
+                <p className={`text-2xl font-bold ${lowStockItems > 0 ? 'text-warning-600' : 'text-neutral-400'}`}>{lowStockItems}</p>
               </div>
               <div className="card">
                 <div className="flex items-center gap-2 mb-1">
                   <AlertTriangle className="w-4 h-4 text-error-600" />
                   <p className="text-xs text-neutral-500">Out of Stock</p>
                 </div>
-                <p className="text-2xl font-bold text-error-600">{outOfStockItems}</p>
+                <p className={`text-2xl font-bold ${outOfStockItems > 0 ? 'text-error-600' : 'text-neutral-400'}`}>{outOfStockItems}</p>
               </div>
             </div>
 
@@ -233,7 +297,11 @@ export default function Godowns() {
                 <div className="text-center py-12">
                   <Package className="w-10 h-10 text-neutral-300 mx-auto mb-3" />
                   <p className="text-sm text-neutral-500">No stock recorded for this godown</p>
-                  <p className="text-xs text-neutral-400 mt-1">Stock is auto-updated on transactions</p>
+                  <button onClick={handleSyncStock} disabled={syncing}
+                    className="mt-3 btn-primary flex items-center gap-2 mx-auto text-xs">
+                    <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+                    {syncing ? 'Syncing...' : 'Sync from Products'}
+                  </button>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -246,7 +314,8 @@ export default function Godowns() {
                         <th className="table-header text-left">Unit</th>
                         <th className="table-header text-right">Value</th>
                         <th className="table-header text-left">Status</th>
-                        <th className="table-header text-left">Stock Level</th>
+                        <th className="table-header text-left">Level</th>
+                        {isAdmin && <th className="table-header text-center">Adjust</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -254,13 +323,29 @@ export default function Godowns() {
                         const product = s.products;
                         const alertQty = product?.low_stock_alert || 0;
                         const isOut = s.quantity === 0;
-                        const isLow = !isOut && s.quantity <= alertQty;
+                        const isLow = !isOut && alertQty > 0 && s.quantity <= alertQty;
                         const stockPct = alertQty > 0 ? Math.min(100, (s.quantity / (alertQty * 3)) * 100) : 100;
+                        const isAdjusting = adjusting?.stockId === s.id;
+
                         return (
-                          <tr key={s.id} className="border-b border-neutral-50 hover:bg-neutral-50">
+                          <tr key={s.id} className={`border-b border-neutral-50 transition-colors ${isAdjusting ? 'bg-blue-50' : 'hover:bg-neutral-50'}`}>
                             <td className="table-cell font-medium text-neutral-800">{product?.name || '—'}</td>
                             <td className="table-cell text-xs text-neutral-500">{product?.sku || '—'}</td>
-                            <td className="table-cell text-right font-bold text-neutral-900">{s.quantity}</td>
+                            <td className="table-cell text-right">
+                              {isAdjusting ? (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  className="w-20 px-2 py-1 text-xs border border-blue-300 rounded-lg text-right font-bold focus:outline-none focus:ring-2 focus:ring-blue-400"
+                                  value={adjusting.newQty}
+                                  onChange={e => setAdjusting({ ...adjusting, newQty: e.target.value })}
+                                  autoFocus
+                                  onKeyDown={e => { if (e.key === 'Enter') handleAdjustSave(); if (e.key === 'Escape') setAdjusting(null); }}
+                                />
+                              ) : (
+                                <span className="font-bold text-neutral-900">{s.quantity}</span>
+                              )}
+                            </td>
                             <td className="table-cell text-xs text-neutral-500">{product?.unit || '—'}</td>
                             <td className="table-cell text-right text-xs text-neutral-600">{formatCurrency(s.quantity * (product?.selling_price || 0))}</td>
                             <td className="table-cell">
@@ -272,7 +357,7 @@ export default function Godowns() {
                                 <span className="badge bg-success-50 text-success-700">In Stock</span>
                               )}
                             </td>
-                            <td className="table-cell w-32">
+                            <td className="table-cell w-24">
                               <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
                                 <div
                                   className={`h-full rounded-full transition-all ${isOut ? 'bg-error-500' : isLow ? 'bg-warning-500' : 'bg-success-500'}`}
@@ -280,6 +365,28 @@ export default function Godowns() {
                                 />
                               </div>
                             </td>
+                            {isAdmin && (
+                              <td className="table-cell text-center">
+                                {isAdjusting ? (
+                                  <div className="flex items-center justify-center gap-1">
+                                    <button onClick={handleAdjustSave} disabled={adjustSaving}
+                                      className="w-6 h-6 rounded-md bg-success-500 text-white flex items-center justify-center hover:bg-success-600 transition-colors">
+                                      <CheckCircle className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button onClick={() => setAdjusting(null)}
+                                      className="w-6 h-6 rounded-md bg-neutral-200 text-neutral-600 flex items-center justify-center hover:bg-neutral-300 transition-colors">
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => setAdjusting({ stockId: s.id, productName: product?.name || '', currentQty: s.quantity, newQty: String(s.quantity) })}
+                                    className="text-[10px] px-2 py-0.5 rounded border border-neutral-200 text-neutral-500 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-colors">
+                                    Edit
+                                  </button>
+                                )}
+                              </td>
+                            )}
                           </tr>
                         );
                       })}
@@ -304,40 +411,94 @@ export default function Godowns() {
         )}
       </div>
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Godown' : 'Add Godown'} maxWidth="max-w-lg">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="form-label">Name *</label>
-              <input className="input-field" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Main Godown" />
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowModal(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-100">
+              <h2 className="text-base font-semibold text-neutral-900">{editing ? 'Edit Godown' : 'Add Godown'}</h2>
+              <button onClick={() => setShowModal(false)} className="w-8 h-8 rounded-lg hover:bg-neutral-100 flex items-center justify-center text-neutral-400 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <div>
-              <label className="form-label">Code</label>
-              <input className="input-field" value={form.code} onChange={e => setForm({ ...form, code: e.target.value })} placeholder="e.g. GDN-001" />
+
+            <div className="px-6 py-5 space-y-5">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-neutral-700">Godown Name <span className="text-error-500">*</span></label>
+                <input
+                  className="input-field w-full"
+                  value={form.name}
+                  onChange={e => setForm({ ...form, name: e.target.value })}
+                  placeholder="e.g. Main Warehouse"
+                  autoFocus
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-neutral-700 flex items-center gap-1.5">
+                    <Hash className="w-3.5 h-3.5 text-neutral-400" /> Code
+                  </label>
+                  <input
+                    className="input-field w-full"
+                    value={form.code}
+                    onChange={e => setForm({ ...form, code: e.target.value })}
+                    placeholder="e.g. GDN-001"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-neutral-700 flex items-center gap-1.5">
+                    <Phone className="w-3.5 h-3.5 text-neutral-400" /> Phone
+                  </label>
+                  <input
+                    className="input-field w-full"
+                    value={form.phone}
+                    onChange={e => setForm({ ...form, phone: e.target.value })}
+                    placeholder="Contact number"
+                    type="tel"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-neutral-700 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-neutral-400" /> Location / Address
+                </label>
+                <input
+                  className="input-field w-full"
+                  value={form.location}
+                  onChange={e => setForm({ ...form, location: e.target.value })}
+                  placeholder="e.g. Plot 12, Industrial Area, Pune"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-neutral-700 flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5 text-neutral-400" /> Manager Name
+                </label>
+                <input
+                  className="input-field w-full"
+                  value={form.manager_name}
+                  onChange={e => setForm({ ...form, manager_name: e.target.value })}
+                  placeholder="e.g. Rajesh Kumar"
+                />
+              </div>
             </div>
-          </div>
-          <div>
-            <label className="form-label">Location</label>
-            <input className="input-field" value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} placeholder="Address or area" />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="form-label">Manager Name</label>
-              <input className="input-field" value={form.manager_name} onChange={e => setForm({ ...form, manager_name: e.target.value })} placeholder="Manager name" />
+
+            <div className="flex justify-end gap-3 px-6 py-4 bg-neutral-50 border-t border-neutral-100">
+              <button onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>
+              <button onClick={handleSave} disabled={saving || !form.name.trim()} className="btn-primary min-w-[140px]">
+                {saving ? (
+                  <span className="flex items-center gap-2 justify-center">
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Saving...
+                  </span>
+                ) : editing ? 'Update Godown' : 'Create Godown'}
+              </button>
             </div>
-            <div>
-              <label className="form-label">Phone</label>
-              <input className="input-field" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="Contact number" />
-            </div>
-          </div>
-          <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>
-            <button onClick={handleSave} disabled={saving || !form.name.trim()} className="btn-primary">
-              {saving ? 'Saving...' : editing ? 'Update Godown' : 'Create Godown'}
-            </button>
           </div>
         </div>
-      </Modal>
+      )}
 
       <ConfirmDialog
         isOpen={showDeleteDialog}
