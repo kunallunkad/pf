@@ -10,6 +10,7 @@ import { useDateRange } from '../../contexts/DateRangeContext';
 import { getSmartRate } from '../../lib/rateCardService';
 import type { SalesOrder, SalesOrderItem, Product, Customer } from '../../types';
 import type { ActivePage } from '../../types';
+import type { PageState } from '../../App';
 
 interface LineItem {
   product_id: string;
@@ -22,7 +23,7 @@ interface LineItem {
 }
 
 interface SalesOrdersProps {
-  onNavigate: (page: ActivePage) => void;
+  onNavigate: (page: ActivePage, state?: PageState) => void;
 }
 
 export default function SalesOrders({ onNavigate }: SalesOrdersProps) {

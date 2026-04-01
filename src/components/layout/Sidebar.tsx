@@ -96,7 +96,7 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
             <SectionLabel label="Sales Flow" />
             <div className="space-y-0.5">
               <NavItem id="sales-orders" label="Sales Orders" icon={FileText} />
-              <NavItem id="invoices" label="Invoices" icon={Receipt} badge={unpaidInvoices} />
+              <NavItem id="invoices" label="Invoices" icon={Receipt} />
               <NavItem id="challans" label="Delivery Challans" icon={Truck} />
               <NavItem id="sales-returns" label="Returns" icon={RotateCcw} />
             </div>

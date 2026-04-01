@@ -9,9 +9,10 @@ import { formatCurrency, formatDate } from '../lib/utils';
 import { useDateRange } from '../contexts/DateRangeContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { ActivePage, Customer, Appointment } from '../types';
+import type { PageState } from '../App';
 
 interface DashboardProps {
-  onNavigate: (page: ActivePage) => void;
+  onNavigate: (page: ActivePage, state?: PageState) => void;
 }
 
 interface PendingAction {

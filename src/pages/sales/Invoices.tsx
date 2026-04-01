@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Search, CreditCard, FileText, Download, Printer, Pencil, Trash2, Eye, Send } from 'lucide-react';
+import { Plus, Search, CreditCard, FileText, Download, Printer, Pencil, Trash2, Eye } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDate, formatDateInput, generateId, exportToCSV } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
@@ -9,7 +9,9 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import InvoicePrint from './InvoicePrint';
 import { useDateRange } from '../../contexts/DateRangeContext';
 import { getSmartRate, updateLastRate } from '../../lib/rateCardService';
-import type { Invoice, Product, Customer, SalesOrder } from '../../types';
+import type { Invoice, Product, Customer, SalesOrder, DeliveryChallan } from '../../types';
+import type { ActivePage } from '../../types';
+import type { PageState } from '../../App';
 
 interface LineItem {
   product_id: string;
@@ -23,7 +25,12 @@ interface LineItem {
   total_price: number;
 }
 
-export default function Invoices() {
+interface InvoicesProps {
+  onNavigate?: (page: ActivePage, state?: PageState) => void;
+  prefillFromDC?: DeliveryChallan;
+}
+
+export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: InvoicesProps) {
   const { dateRange } = useDateRange();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [search, setSearch] = useState('');
@@ -67,6 +74,83 @@ export default function Invoices() {
   const [payForm, setPayForm] = useState({ amount: '', payment_mode: 'Cash', reference_number: '', payment_date: new Date().toISOString().split('T')[0] });
 
   useEffect(() => { loadData(); }, []);
+
+  useEffect(() => {
+    if (!prefillFromDC) return;
+    const loadAndPrefill = async () => {
+      let soItems: SalesOrder['items'] = [];
+      let so: SalesOrder | null = null;
+      if (prefillFromDC.sales_order_id) {
+        const { data: soData } = await supabase
+          .from('sales_orders')
+          .select('*, items:sales_order_items(*)')
+          .eq('id', prefillFromDC.sales_order_id)
+          .maybeSingle();
+        so = soData;
+        if (soData?.items && soData.items.length > 0) {
+          soItems = soData.items;
+        } else {
+          const { data: itemsData } = await supabase
+            .from('sales_order_items')
+            .select('*')
+            .eq('sales_order_id', prefillFromDC.sales_order_id);
+          soItems = itemsData || [];
+        }
+      } else {
+        const { data: challanItems } = await supabase
+          .from('delivery_challan_items')
+          .select('*')
+          .eq('delivery_challan_id', prefillFromDC.id);
+        soItems = (challanItems || []).map(i => ({
+          id: i.id,
+          sales_order_id: '',
+          product_id: i.product_id,
+          product_name: i.product_name,
+          unit: i.unit,
+          quantity: i.quantity,
+          unit_price: 0,
+          discount_pct: 0,
+          total_price: 0,
+        }));
+      }
+
+      setForm({
+        customer_id: prefillFromDC.customer_id || '',
+        customer_name: prefillFromDC.customer_name,
+        customer_phone: prefillFromDC.customer_phone || '',
+        customer_address: prefillFromDC.customer_address || '',
+        customer_address2: prefillFromDC.customer_address2 || '',
+        customer_city: prefillFromDC.customer_city || '',
+        customer_state: prefillFromDC.customer_state || '',
+        customer_pincode: prefillFromDC.customer_pincode || '',
+        invoice_date: new Date().toISOString().split('T')[0],
+        due_date: '',
+        courier_charges: String(so?.courier_charges || 0),
+        discount_amount: String(so?.discount_amount || 0),
+        payment_terms: 'Due on receipt',
+        notes: prefillFromDC.notes || '',
+        bank_name: '', account_number: '', ifsc_code: '',
+        sales_order_id: prefillFromDC.sales_order_id || '',
+      });
+
+      if (so) setSelectedSO(so);
+
+      setItems(soItems.map(item => ({
+        product_id: item.product_id || '',
+        product_name: item.product_name,
+        description: '',
+        unit: item.unit,
+        quantity: String(item.quantity),
+        unit_price: String(item.unit_price || 0),
+        discount_pct: String(item.discount_pct || 0),
+        tax_pct: '0',
+        total_price: item.total_price || 0,
+      })));
+
+      setShowModal(true);
+    };
+    loadAndPrefill();
+  }, [prefillFromDC]);
 
   const loadData = async () => {
     const [invRes, productsRes, customersRes] = await Promise.all([
@@ -444,7 +528,34 @@ export default function Invoices() {
 
   const handleDelete = async () => {
     if (!selectedInvoice) return;
-    await supabase.from('invoices').update({ status: 'cancelled' }).eq('id', selectedInvoice.id);
+    const outstanding = selectedInvoice.outstanding_amount || 0;
+    await supabase.from('invoices').update({
+      status: 'cancelled',
+      outstanding_amount: 0,
+    }).eq('id', selectedInvoice.id);
+
+    if (selectedInvoice.customer_id && outstanding > 0) {
+      const { data: cust } = await supabase.from('customers').select('balance, total_revenue').eq('id', selectedInvoice.customer_id).maybeSingle();
+      if (cust) {
+        await supabase.from('customers').update({
+          balance: Math.max(0, (cust.balance || 0) - outstanding),
+          total_revenue: Math.max(0, (cust.total_revenue || 0) - selectedInvoice.total_amount),
+        }).eq('id', selectedInvoice.customer_id);
+      }
+    }
+
+    await supabase.from('ledger_entries').insert({
+      entry_date: new Date().toISOString().split('T')[0],
+      entry_type: 'credit',
+      account_type: 'customer',
+      party_id: selectedInvoice.customer_id || null,
+      party_name: selectedInvoice.customer_name,
+      reference_type: 'invoice',
+      reference_id: selectedInvoice.id,
+      description: 'Cancellation of Invoice ' + selectedInvoice.invoice_number,
+      amount: outstanding,
+    });
+
     loadData();
   };
 
@@ -545,7 +656,7 @@ export default function Invoices() {
     return matchSearch && matchStatus && matchDate;
   });
 
-  const totalOutstanding = invoices.reduce((s, i) => s + (i.outstanding_amount || 0), 0);
+  const totalOutstanding = invoices.filter(i => i.status !== 'cancelled').reduce((s, i) => s + (i.outstanding_amount || 0), 0);
   const paidThisMonth = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.total_amount, 0);
 
   const STATUSES = ['All', 'Draft', 'Sent', 'Partial', 'Paid', 'Overdue', 'Cancelled'];

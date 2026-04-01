@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Truck, Plus, CreditCard as Edit2, Search, Filter, CheckCircle, Clock, Package, ArrowRight, AlertTriangle, MapPin, Hash, CalendarDays } from 'lucide-react';
+import { Truck, Plus, CreditCard as Edit2, Search, CheckCircle, Clock, ArrowRight, Hash } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { formatDate, generateId } from '../lib/utils';
-import type { DispatchEntry } from '../types';
+import type { DispatchEntry, DeliveryChallan } from '../types';
+import type { ActivePage } from '../types';
 import Modal from '../components/ui/Modal';
 import StatusBadge from '../components/ui/StatusBadge';
 
@@ -46,7 +47,12 @@ const emptyForm: DispatchFormData = {
 interface SOOption { id: string; so_number: string; customer_name: string; }
 interface InvOption { id: string; invoice_number: string; customer_name: string; }
 
-export default function Dispatch() {
+interface DispatchProps {
+  prefillFromDC?: DeliveryChallan;
+  onNavigate?: (page: ActivePage) => void;
+}
+
+export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: DispatchProps) {
   const [dispatches, setDispatches] = useState<DispatchEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -59,6 +65,27 @@ export default function Dispatch() {
   const [invOptions, setInvOptions] = useState<InvOption[]>([]);
 
   useEffect(() => { loadDispatches(); loadOptions(); }, []);
+
+  useEffect(() => {
+    if (prefillFromDC) {
+      setEditing(null);
+      setForm({
+        ...emptyForm,
+        reference_type: prefillFromDC.sales_order_id ? 'sales_order' : 'invoice',
+        sales_order_id: prefillFromDC.sales_order_id || '',
+        invoice_id: prefillFromDC.invoice_id || '',
+        customer_name: prefillFromDC.customer_name || '',
+        dispatch_mode: prefillFromDC.dispatch_mode || 'Courier',
+        transport_name: prefillFromDC.courier_company || '',
+        lr_number: prefillFromDC.tracking_number || '',
+        dispatch_date: prefillFromDC.challan_date || new Date().toISOString().split('T')[0],
+        notes: prefillFromDC.notes || '',
+        status: 'dispatched',
+        vehicle_number: '', driver_name: '', driver_phone: '', expected_delivery_date: '',
+      });
+      setShowModal(true);
+    }
+  }, [prefillFromDC]);
 
   const loadDispatches = async () => {
     setLoading(true);

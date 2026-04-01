@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Printer, Truck, Download, Eye, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Search, Printer, Truck, Download, Eye, Pencil, Trash2, Send, Receipt } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { formatDate, generateId, exportToCSV } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
@@ -8,6 +8,8 @@ import EmptyState from '../../components/ui/EmptyState';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import ChallanPrint from './ChallanPrint';
 import type { DeliveryChallan as DCType, Product, Customer } from '../../types';
+import type { ActivePage } from '../../types';
+import type { PageState } from '../../App';
 
 interface LineItem {
   product_id: string;
@@ -25,7 +27,11 @@ interface ChallanItem {
   quantity: number;
 }
 
-export default function DeliveryChallan() {
+interface DeliveryChallanProps {
+  onNavigate: (page: ActivePage, state?: PageState) => void;
+}
+
+export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
   const [challans, setChallans] = useState<DCType[]>([]);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -286,6 +292,24 @@ export default function DeliveryChallan() {
                   <td className="table-cell"><StatusBadge status={dc.status} /></td>
                   <td className="table-cell text-right">
                     <div className="flex items-center justify-end gap-1">
+                      {dc.status !== 'cancelled' && (
+                        <button
+                          onClick={() => onNavigate('courier', { prefillDCForShipment: dc })}
+                          title="Create Shipment"
+                          className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
+                        >
+                          <Send className="w-3 h-3" /> Ship
+                        </button>
+                      )}
+                      {dc.status !== 'cancelled' && dc.sales_order_id && (
+                        <button
+                          onClick={() => onNavigate('invoices', { prefillDCForInvoice: dc })}
+                          title="Create Invoice from this DC"
+                          className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-primary-50 text-primary-700 hover:bg-primary-100 transition-colors"
+                        >
+                          <Receipt className="w-3 h-3" /> Invoice
+                        </button>
+                      )}
                       <button onClick={() => openView(dc)} title="View" className="p-1.5 rounded-lg text-neutral-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"><Eye className="w-3.5 h-3.5" /></button>
                       <button onClick={() => openPrint(dc)} title="Print" className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 transition-colors"><Printer className="w-3.5 h-3.5" /></button>
                       {dc.status !== 'delivered' && dc.status !== 'cancelled' && (

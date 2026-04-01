@@ -18,14 +18,21 @@ import Ledger from './pages/finance/Ledger';
 import Expenses from './pages/finance/Expenses';
 import Journal from './pages/finance/Journal';
 import Courier from './pages/Courier';
+import Dispatch from './pages/Dispatch';
 import Reports from './pages/Reports';
 import Automation from './pages/Automation';
 import CompanySettings from './pages/CompanySettings';
-import type { ActivePage } from './types';
+import type { ActivePage, DeliveryChallan as DCType } from './types';
+
+export interface PageState {
+  prefillDCForShipment?: DCType;
+  prefillDCForInvoice?: DCType;
+}
 
 function AppShell() {
   const { user, loading, isAdmin, canAccessFinance, canAccessSales, canAccessInventory } = useAuth();
   const [activePage, setActivePage] = useState<ActivePage>('dashboard');
+  const [pageState, setPageState] = useState<PageState>({});
 
   if (loading) {
     return (
@@ -40,7 +47,10 @@ function AppShell() {
 
   if (!user) return <Login />;
 
-  const navigate = (page: ActivePage) => setActivePage(page);
+  const navigate = (page: ActivePage, state?: PageState) => {
+    setPageState(state || {});
+    setActivePage(page);
+  };
 
   const renderPage = () => {
     switch (activePage) {
@@ -50,8 +60,8 @@ function AppShell() {
       case 'calendar': return <CalendarPage />;
 
       case 'sales-orders': return canAccessSales ? <SalesOrders onNavigate={navigate} /> : <Dashboard onNavigate={navigate} />;
-      case 'invoices': return canAccessSales ? <Invoices /> : <Dashboard onNavigate={navigate} />;
-      case 'challans': return canAccessSales ? <DeliveryChallan /> : <Dashboard onNavigate={navigate} />;
+      case 'invoices': return canAccessSales ? <Invoices onNavigate={navigate} prefillFromDC={pageState.prefillDCForInvoice} /> : <Dashboard onNavigate={navigate} />;
+      case 'challans': return canAccessSales ? <DeliveryChallan onNavigate={navigate} /> : <Dashboard onNavigate={navigate} />;
       case 'dispatch': return <Courier />;
       case 'sales-returns': return canAccessSales ? <SalesReturns /> : <Dashboard onNavigate={navigate} />;
 
@@ -64,7 +74,7 @@ function AppShell() {
       case 'expenses': return canAccessFinance ? <Expenses /> : <Dashboard onNavigate={navigate} />;
       case 'journal': return canAccessFinance ? <Journal /> : <Dashboard onNavigate={navigate} />;
 
-      case 'courier': return <Courier />;
+      case 'courier': return <Dispatch prefillFromDC={pageState.prefillDCForShipment} onNavigate={navigate} />;
       case 'reports': return <Reports />;
       case 'automation': return isAdmin ? <Automation /> : <Dashboard onNavigate={navigate} />;
       case 'company-settings': return isAdmin ? <CompanySettings /> : <Dashboard onNavigate={navigate} />;
