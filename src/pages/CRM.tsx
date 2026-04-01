@@ -589,7 +589,7 @@ export default function CRM() {
 
   if (selectedCustomer) {
     const totalRevenue = customerInvoices.filter(inv => inv.status === 'paid').reduce((sum, inv) => sum + inv.total_amount, 0);
-    const pendingPayment = customerInvoices.reduce((sum, inv) => sum + (inv.outstanding_amount || 0), 0);
+    const pendingPayment = customerInvoices.filter(inv => inv.status !== 'cancelled').reduce((sum, inv) => sum + (inv.outstanding_amount || 0), 0);
     const lastInteraction = notes.length > 0 ? notes[0].note_date : null;
     const customerScore = computeCustomerScore(selectedCustomer, totalRevenue, notes.length);
     const filteredInvoices = customerInvoices.filter(inv => inv.invoice_date >= dateRange.from && inv.invoice_date <= dateRange.to);
