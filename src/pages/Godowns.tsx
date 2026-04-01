@@ -285,7 +285,7 @@ export default function Godowns() {
                     placeholder="Search products..."
                     value={stockSearch}
                     onChange={e => setStockSearch(e.target.value)}
-                    className="input-field pl-8 py-1.5 text-xs w-48"
+                    className="input pl-8 py-1.5 text-xs w-48"
                   />
                 </div>
               </div>
@@ -426,7 +426,7 @@ export default function Godowns() {
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-neutral-700">Godown Name <span className="text-error-500">*</span></label>
                 <input
-                  className="input-field w-full"
+                  className="input w-full"
                   value={form.name}
                   onChange={e => setForm({ ...form, name: e.target.value })}
                   placeholder="e.g. Main Warehouse"
@@ -440,7 +440,7 @@ export default function Godowns() {
                     <Hash className="w-3.5 h-3.5 text-neutral-400" /> Code
                   </label>
                   <input
-                    className="input-field w-full"
+                    className="input w-full"
                     value={form.code}
                     onChange={e => setForm({ ...form, code: e.target.value })}
                     placeholder="e.g. GDN-001"
@@ -451,7 +451,7 @@ export default function Godowns() {
                     <Phone className="w-3.5 h-3.5 text-neutral-400" /> Phone
                   </label>
                   <input
-                    className="input-field w-full"
+                    className="input w-full"
                     value={form.phone}
                     onChange={e => setForm({ ...form, phone: e.target.value })}
                     placeholder="Contact number"
@@ -465,7 +465,7 @@ export default function Godowns() {
                   <MapPin className="w-3.5 h-3.5 text-neutral-400" /> Location / Address
                 </label>
                 <input
-                  className="input-field w-full"
+                  className="input w-full"
                   value={form.location}
                   onChange={e => setForm({ ...form, location: e.target.value })}
                   placeholder="e.g. Plot 12, Industrial Area, Pune"
@@ -477,7 +477,7 @@ export default function Godowns() {
                   <User className="w-3.5 h-3.5 text-neutral-400" /> Manager Name
                 </label>
                 <input
-                  className="input-field w-full"
+                  className="input w-full"
                   value={form.manager_name}
                   onChange={e => setForm({ ...form, manager_name: e.target.value })}
                   placeholder="e.g. Rajesh Kumar"
