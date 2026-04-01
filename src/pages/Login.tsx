@@ -4,9 +4,8 @@ import { Star, Eye, EyeOff, User } from 'lucide-react';
 import { usernameToEmail } from '../lib/utils';
 
 export default function Login() {
-  const { signIn, signUp } = useAuth();
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
-  const [form, setForm] = useState({ username: '', password: '', displayName: '', role: 'user' as 'admin' | 'user' });
+  const { signIn } = useAuth();
+  const [form, setForm] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPwd, setShowPwd] = useState(false);
@@ -17,13 +16,8 @@ export default function Login() {
     if (!form.username.trim()) { setError('Username is required'); return; }
     setLoading(true);
     const email = usernameToEmail(form.username.trim());
-    if (mode === 'login') {
-      const { error } = await signIn(email, form.password);
-      if (error) setError('Invalid username or password');
-    } else {
-      const { error } = await signUp(email, form.password, form.displayName || form.username, form.role);
-      if (error) setError(error);
-    }
+    const { error } = await signIn(email, form.password);
+    if (error) setError('Invalid username or password');
     setLoading(false);
   };
 
@@ -73,25 +67,10 @@ export default function Login() {
             <p className="text-base font-bold text-neutral-800">Prachi Fulfagar</p>
           </div>
 
-          <h2 className="text-2xl font-bold text-neutral-900 mb-1">
-            {mode === 'login' ? 'Welcome back' : 'Create account'}
-          </h2>
-          <p className="text-sm text-neutral-500 mb-6">
-            {mode === 'login' ? 'Sign in with your username and password' : 'Set up your access'}
-          </p>
+          <h2 className="text-2xl font-bold text-neutral-900 mb-1">Welcome back</h2>
+          <p className="text-sm text-neutral-500 mb-6">Sign in with your username and password</p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'signup' && (
-              <div>
-                <label className="label">Display Name</label>
-                <input
-                  value={form.displayName}
-                  onChange={e => setForm(f => ({ ...f, displayName: e.target.value }))}
-                  className="input"
-                  placeholder="Your full name"
-                />
-              </div>
-            )}
             <div>
               <label className="label">Username</label>
               <div className="relative">
@@ -117,7 +96,7 @@ export default function Login() {
                   placeholder="••••••••"
                   required
                   minLength={6}
-                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                  autoComplete="current-password"
                 />
                 <button type="button" onClick={() => setShowPwd(v => !v)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600">
@@ -125,16 +104,6 @@ export default function Login() {
                 </button>
               </div>
             </div>
-            {mode === 'signup' && (
-              <div>
-                <label className="label">Role</label>
-                <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value as 'admin' | 'user' }))} className="input">
-                  <option value="admin">Admin (Full Access)</option>
-                  <option value="user">Staff (Limited Access)</option>
-                </select>
-                <p className="text-[10px] text-neutral-400 mt-1">Admin can view profits and purchase prices. Staff cannot.</p>
-              </div>
-            )}
 
             {error && (
               <div className="bg-error-50 border border-error-200 rounded-lg px-3 py-2 text-xs text-error-700">
@@ -147,25 +116,9 @@ export default function Login() {
               disabled={loading}
               className="w-full btn-primary justify-center py-2.5 text-sm rounded-lg"
             >
-              {loading ? 'Please wait...' : mode === 'login' ? 'Sign In' : 'Create Account'}
+              {loading ? 'Please wait...' : 'Sign In'}
             </button>
           </form>
-
-          {mode === 'login' && import.meta.env.DEV && (
-            <div className="mt-4 p-3 bg-neutral-50 rounded-lg border border-neutral-200">
-              <p className="text-[10px] text-neutral-500 font-semibold mb-1">Default Login</p>
-              <p className="text-xs text-neutral-600">Username: <span className="font-mono font-semibold">admin</span></p>
-              <p className="text-xs text-neutral-600">Password: <span className="font-mono font-semibold">admin123</span></p>
-            </div>
-          )}
-
-          <p className="text-center text-sm text-neutral-500 mt-5">
-            {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
-            <button onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); }}
-              className="text-primary-600 font-semibold hover:underline">
-              {mode === 'login' ? 'Sign up' : 'Sign in'}
-            </button>
-          </p>
         </div>
       </div>
     </div>
