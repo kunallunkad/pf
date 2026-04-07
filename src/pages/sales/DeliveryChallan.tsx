@@ -467,70 +467,66 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
             </button>
           </>
         }>
-        <div className="space-y-4">
-          <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <FileText className="w-3.5 h-3.5 text-blue-600" />
-              <p className="text-xs font-semibold text-blue-800">Link to Sales Order (optional)</p>
-            </div>
-            <select
-              value={form.sales_order_id}
-              onChange={e => handleSOChange(e.target.value)}
-              className="input text-xs"
-              disabled={loadingSO}
-            >
-              <option value="">-- Select Sales Order to auto-fill items & customer --</option>
-              {[...editingSOs, ...salesOrders.filter(so => !editingSOs.find(e => e.id === so.id))].map(so => (
-                <option key={so.id} value={so.id}>{so.so_number} — {so.customer_name}</option>
-              ))}
-            </select>
-            {loadingSO && <p className="text-xs text-blue-600 mt-1">Loading items from Sales Order...</p>}
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="label">Customer</label>
-              <select value={form.customer_id} onChange={e => handleCustomerChange(e.target.value)} className="input">
-                <option value="">-- Select Customer --</option>
-                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">Customer Name *</label>
-              <input value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} className="input" />
-            </div>
-            <div>
-              <label className="label">Phone</label>
-              <input value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))} className="input" />
-            </div>
-            <div>
-              <label className="label">Challan Date</label>
-              <input type="date" value={form.challan_date} onChange={e => setForm(f => ({ ...f, challan_date: e.target.value }))} className="input" />
-            </div>
-            <div>
-              <label className="label">Dispatch Mode</label>
-              <select value={form.dispatch_mode} onChange={e => setForm(f => ({ ...f, dispatch_mode: e.target.value }))} className="input">
-                {['Courier', 'Hand Delivery', 'Postal', 'Transport'].map(m => <option key={m}>{m}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">Courier Company</label>
-              <input value={form.courier_company} onChange={e => setForm(f => ({ ...f, courier_company: e.target.value }))} className="input" placeholder="e.g., BlueDart" />
-            </div>
-            <div>
-              <label className="label">Tracking Number</label>
-              <input value={form.tracking_number} onChange={e => setForm(f => ({ ...f, tracking_number: e.target.value }))} className="input" placeholder="AWB / Tracking ID" />
-            </div>
-            <div>
-              <label className="label">Address</label>
-              <input value={form.customer_address} onChange={e => setForm(f => ({ ...f, customer_address: e.target.value }))} className="input" placeholder="Street / House No." />
-            </div>
-            <div>
-              <label className="label">City / State / PIN</label>
-              <div className="flex gap-1">
-                <input value={form.customer_city} onChange={e => setForm(f => ({ ...f, customer_city: e.target.value }))} className="input" placeholder="City" />
-                <input value={form.customer_pincode} onChange={e => setForm(f => ({ ...f, customer_pincode: e.target.value }))} className="input w-24" placeholder="PIN" />
+        <div className="space-y-3">
+          {/* Compact SO banner — shown when linked (pre-selected from the SO picker popup) */}
+          {form.sales_order_id && (
+            <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider">Linked Sales Order</p>
+                <p className="text-sm text-blue-800 font-medium">
+                  {[...editingSOs, ...salesOrders].find(s => s.id === form.sales_order_id)?.so_number || form.sales_order_id}
+                  {' — '}{form.customer_name}
+                </p>
               </div>
+              {loadingSO && <p className="text-xs text-blue-500 animate-pulse">Loading...</p>}
+            </div>
+          )}
+
+          {/* 2-column layout — same as Invoice */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* LEFT — Challan Details */}
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">Challan Details</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="label">Challan Date</label>
+                  <input type="date" value={form.challan_date} onChange={e => setForm(f => ({ ...f, challan_date: e.target.value }))} className="input text-xs" />
+                </div>
+                <div>
+                  <label className="label">Dispatch Mode</label>
+                  <select value={form.dispatch_mode} onChange={e => setForm(f => ({ ...f, dispatch_mode: e.target.value }))} className="input text-xs">
+                    {['Courier', 'Hand Delivery', 'Postal', 'Transport'].map(m => <option key={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Courier Company</label>
+                  <input value={form.courier_company} onChange={e => setForm(f => ({ ...f, courier_company: e.target.value }))} className="input text-xs" placeholder="e.g., BlueDart" />
+                </div>
+                <div>
+                  <label className="label">Tracking Number</label>
+                  <input value={form.tracking_number} onChange={e => setForm(f => ({ ...f, tracking_number: e.target.value }))} className="input text-xs" placeholder="AWB / Tracking ID" />
+                </div>
+              </div>
+            </div>
+            {/* RIGHT — Ship To */}
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">Ship To</p>
+              <div>
+                <label className="label">Customer</label>
+                <select value={form.customer_id} onChange={e => handleCustomerChange(e.target.value)} className="input text-xs">
+                  <option value="">-- Select Customer --</option>
+                  {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <input value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} className="input text-xs" placeholder="Customer Name *" />
+              <input value={form.customer_address} onChange={e => setForm(f => ({ ...f, customer_address: e.target.value }))} className="input text-xs" placeholder="Address Line 1" />
+              <input value={form.customer_address2} onChange={e => setForm(f => ({ ...f, customer_address2: e.target.value }))} className="input text-xs" placeholder="Address Line 2" />
+              <div className="flex gap-1.5">
+                <input value={form.customer_city} onChange={e => setForm(f => ({ ...f, customer_city: e.target.value }))} className="input text-xs flex-1" placeholder="City" />
+                <input value={form.customer_state} onChange={e => setForm(f => ({ ...f, customer_state: e.target.value }))} className="input text-xs w-24" placeholder="State" />
+                <input value={form.customer_pincode} onChange={e => setForm(f => ({ ...f, customer_pincode: e.target.value }))} className="input text-xs w-20" placeholder="PIN" maxLength={6} />
+              </div>
+              <input value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))} className="input text-xs" placeholder="Phone" />
             </div>
           </div>
 

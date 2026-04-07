@@ -182,75 +182,79 @@ export default function Courier({ prefillFromDC }: CourierProps) {
 
   const printLabel = () => {
     if (!printEntry) return;
-    const w = window.open('', '_blank', 'width=794,height=500');
-    if (!w) return;
-    const from = [
-      `<strong>${company.name}</strong>`,
-      company.address1,
-      company.address2,
+    // Use hidden iframe — avoids blank popup from document.write being blocked
+    const existingFrame = document.getElementById('label-print-frame');
+    if (existingFrame) existingFrame.remove();
+    const iframe = document.createElement('iframe');
+    iframe.id = 'label-print-frame';
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:210mm;height:297mm;border:none;';
+    document.body.appendChild(iframe);
+    const fromLines = [
+      `<strong style="font-size:15px">${company.name}</strong>`,
+      company.tagline ? `<span style="font-size:11px;color:#666">${company.tagline}</span>` : '',
+      company.address1 || '',
+      company.address2 || '',
       [company.city, company.state, company.pincode].filter(Boolean).join(', '),
-      company.phone,
-    ].filter(Boolean).join('<br/>');
-    const to = [
-      `<strong>${printEntry.customer_name}</strong>`,
-      printEntry.customer_phone,
-      printEntry.customer_address,
+      company.phone || '',
+    ].filter(Boolean).join('<br>');
+    const toLines = [
+      `<strong style="font-size:15px">${printEntry.customer_name}</strong>`,
+      printEntry.customer_phone || '',
+      printEntry.customer_address || '',
       [printEntry.customer_city, printEntry.customer_state, printEntry.customer_pincode].filter(Boolean).join(', '),
-    ].filter(Boolean).join('<br/>');
-    w.document.write(`<!DOCTYPE html><html><head><title>Shipping Label</title>
+    ].filter(Boolean).join('<br>');
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Shipping Label</title>
 <style>
-  @page { size: A4; margin: 10mm; }
-  * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
-  body { background: white; padding: 12mm; }
-  .label-box { border: 2.5px solid #000; border-radius: 4px; padding: 0; max-width: 180mm; margin: 0 auto; }
-  .header { background: #1a1a1a; color: white; padding: 8px 14px; display: flex; justify-content: space-between; align-items: center; }
-  .header-title { font-size: 18px; font-weight: 700; letter-spacing: 2px; }
-  .header-meta { text-align: right; font-size: 11px; }
-  .body { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
-  .addr-box { padding: 14px; }
-  .addr-box + .addr-box { border-left: 1.5px solid #ccc; }
-  .addr-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 6px; }
-  .addr-text { font-size: 13px; line-height: 1.6; }
-  .divider { border-top: 1.5px solid #ccc; }
-  .footer { padding: 8px 14px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #444; }
-  .tracking-box { background: #f5f5f5; border: 1px solid #ddd; padding: 4px 10px; border-radius: 3px; font-family: monospace; font-size: 12px; font-weight: 700; }
-  @media print { .no-print { display: none !important; } }
+  @page { size: A4 landscape; margin: 8mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; background: white; }
+  .wrap { border: 3px solid #000; max-width: 260mm; margin: 0 auto; }
+  .hdr { background: #111; color: #fff; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; }
+  .hdr-title { font-size: 22px; font-weight: 900; letter-spacing: 3px; }
+  .hdr-meta { text-align: right; font-size: 11px; line-height: 1.6; }
+  .addrs { display: grid; grid-template-columns: 3fr 2fr; border-top: none; }
+  .addr { padding: 20px 18px; min-height: 80mm; }
+  .addr + .addr { border-left: 2px solid #ccc; }
+  .lbl { font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: 1.5px; color: #888; margin-bottom: 8px; display: block; }
+  .addr-text { font-size: 14px; line-height: 1.9; color: #111; }
+  .footer { border-top: 2px solid #000; display: grid; grid-template-columns: 1fr 1fr; }
+  .footer-cell { padding: 10px 16px; border-right: 1px solid #ccc; }
+  .footer-cell:last-child { border-right: none; }
+  .footer-lbl { font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; color: #666; }
+  .footer-val { font-size: 13px; font-weight: 700; margin-top: 2px; }
+  .tracking { font-family: monospace; font-size: 16px; font-weight: 900; letter-spacing: 2px; background: #f5f5f5; border: 1px solid #ccc; padding: 4px 10px; border-radius: 3px; display: inline-block; }
 </style></head><body>
-<div class="no-print" style="margin-bottom:12px;display:flex;gap:8px">
-  <button onclick="window.print()" style="background:#e8610a;color:white;border:none;padding:8px 18px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600">🖨️ Print Label</button>
-  <button onclick="window.close()" style="background:#eee;border:1px solid #ccc;padding:8px 14px;border-radius:6px;font-size:13px;cursor:pointer">Close</button>
-</div>
-<div class="label-box">
-  <div class="header">
-    <span class="header-title">SHIPPING LABEL</span>
-    <div class="header-meta">
-      <div>Date: ${printEntry.courier_date}</div>
-      <div>Via: ${printEntry.courier_company}</div>
+<div class="wrap">
+  <div class="hdr">
+    <span class="hdr-title">SHIPPING LABEL</span>
+    <div class="hdr-meta">Date: ${printEntry.courier_date}<br>Via: ${printEntry.courier_company}</div>
+  </div>
+  <div class="addrs">
+    <div class="addr">
+      <span class="lbl">📦 SHIP TO:</span>
+      <div class="addr-text">${toLines}</div>
+    </div>
+    <div class="addr">
+      <span class="lbl">FROM:</span>
+      <div class="addr-text">${fromLines}</div>
     </div>
   </div>
-  <div class="body">
-    <div class="addr-box">
-      <div class="addr-label">FROM</div>
-      <div class="addr-text">${from}</div>
-    </div>
-    <div class="addr-box">
-      <div class="addr-label">TO (SHIP TO)</div>
-      <div class="addr-text">${to}</div>
-    </div>
-  </div>
-  <div class="divider"></div>
   <div class="footer">
-    <div>
-      ${printEntry.tracking_id ? `<span style="margin-right:6px">Tracking:</span><span class="tracking-box">${printEntry.tracking_id}</span>` : '<span style="color:#999">No tracking number</span>'}
+    <div class="footer-cell">
+      <div class="footer-lbl">Tracking / AWB</div>
+      <div class="footer-val">${printEntry.tracking_id ? `<span class="tracking">${printEntry.tracking_id}</span>` : '—'}</div>
     </div>
-    <div>
-      ${printEntry.weight_kg ? `Weight: ${printEntry.weight_kg} kg` : ''}
-      ${printEntry.notes ? `&nbsp;| Note: ${printEntry.notes}` : ''}
+    <div class="footer-cell">
+      <div class="footer-lbl">Weight&nbsp;&nbsp;&nbsp;&nbsp;Remarks</div>
+      <div class="footer-val">${printEntry.weight_kg ? printEntry.weight_kg + ' kg' : '—'}&nbsp;&nbsp;&nbsp;${printEntry.notes || 'No Remarks'}</div>
     </div>
   </div>
 </div>
-</body></html>`);
-    w.document.close();
+</body></html>`;
+    const doc = iframe.contentWindow?.document;
+    if (!doc) return;
+    doc.open(); doc.write(html); doc.close();
+    setTimeout(() => { iframe.contentWindow?.print(); }, 300);
   };
 
   const filtered = entries.filter(e => {
