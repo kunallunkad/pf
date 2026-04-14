@@ -592,7 +592,7 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
                         )}
                         <button onClick={() => openView(o)} title="View" className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 transition-colors"><Eye className="w-3.5 h-3.5" /></button>
                         <button onClick={() => openSOPrint(o)} title="Print Proforma" className="p-1.5 rounded-lg text-neutral-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"><Printer className="w-3.5 h-3.5" /></button>
-                        {(o.status === 'confirmed' || o.status === 'draft') && (
+                        {o.status !== 'cancelled' && (
                           <button onClick={() => openEdit(o)} title="Edit" className="p-1.5 rounded-lg text-neutral-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
                         )}
                         <button onClick={() => { setDeleteTarget(o); setShowConfirm(true); }} title="Cancel" className="p-1.5 rounded-lg text-neutral-400 hover:text-error-600 hover:bg-error-50 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
