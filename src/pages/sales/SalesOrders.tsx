@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, FileText, ChevronDown, ChevronRight, Receipt, Truck, Download, Eye, Pencil, Trash2, Printer, Send, Warehouse, ArrowRight } from 'lucide-react';
+import { Plus, Search, FileText, ChevronDown, ChevronRight, Receipt, Truck, Download, Eye, Pencil, Trash2, Printer, Send, Warehouse, ArrowRight, XCircle, X } from 'lucide-react';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDate, generateId, nextDocNumber, exportToCSV } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
@@ -54,6 +55,11 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
   const [printOrder, setPrintOrder] = useState<SalesOrder | null>(null);
   const [printItems, setPrintItems] = useState<SalesOrderItem[]>([]);
   const [printCompany, setPrintCompany] = useState<Company | undefined>(undefined);
+  const [filterCustomer, setFilterCustomer] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterFrom, setFilterFrom] = useState('');
+  const [filterTo, setFilterTo] = useState('');
+  const [cancelSOTarget, setCancelSOTarget] = useState<SalesOrder | null>(null);
 
   const [form, setForm] = useState({
     customer_id: '', customer_name: '', customer_phone: '',
@@ -513,12 +519,18 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
     }
   };
 
-  const filtered = orders.filter(o =>
-    o.so_date >= dateRange.from &&
-    o.so_date <= dateRange.to &&
-    (o.so_number.toLowerCase().includes(search.toLowerCase()) ||
-    o.customer_name.toLowerCase().includes(search.toLowerCase()))
-  );
+  const filtered = orders.filter(o => {
+    const matchSearch = o.so_number.toLowerCase().includes(search.toLowerCase()) || o.customer_name.toLowerCase().includes(search.toLowerCase());
+    const matchDate = o.so_date >= dateRange.from && o.so_date <= dateRange.to;
+    const matchCustomer = !filterCustomer || o.customer_name === filterCustomer;
+    const matchStatus = !filterStatus || o.status === filterStatus;
+    const matchFrom = !filterFrom || o.so_date >= filterFrom;
+    const matchTo = !filterTo || o.so_date <= filterTo;
+    return matchSearch && matchDate && matchCustomer && matchStatus && matchFrom && matchTo;
+  });
+
+  const uniqueSOCustomers = [...new Set(orders.map(o => o.customer_name))].sort();
+  const hasSOFilters = filterCustomer || filterStatus || filterFrom || filterTo;
 
   const statusColors: Record<string, string> = {
     draft: 'text-neutral-500',
@@ -597,6 +609,31 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
           </div>
         </div>
 
+        <div className="flex items-center gap-2 flex-wrap bg-white border border-neutral-100 rounded-xl px-3 py-2">
+          <select value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)} className="input text-xs w-44 py-1">
+            <option value="">All Customers</option>
+            {uniqueSOCustomers.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="input text-xs w-32 py-1">
+            <option value="">All Statuses</option>
+            {['draft','confirmed','dispatched','delivered','invoiced','cancelled'].map(s => (
+              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+            ))}
+          </select>
+          <div className="flex items-center gap-1 text-xs text-neutral-400">
+            <span>From</span>
+            <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="input text-xs py-1 w-32" />
+            <span>To</span>
+            <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="input text-xs py-1 w-32" />
+          </div>
+          {hasSOFilters && (
+            <button onClick={() => { setFilterCustomer(''); setFilterStatus(''); setFilterFrom(''); setFilterTo(''); }} className="flex items-center gap-1 text-xs text-neutral-400 hover:text-error-600 transition-colors">
+              <X className="w-3 h-3" /> Clear
+            </button>
+          )}
+          <span className="text-[10px] text-neutral-400 ml-auto">{filtered.length} record{filtered.length !== 1 ? 's' : ''}</span>
+        </div>
+
         <div className="card p-0 overflow-hidden">
           <table className="w-full">
             <thead className="bg-neutral-50 border-b border-neutral-100">
@@ -655,6 +692,9 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
                         <button onClick={() => openSOPrint(o)} title="Print Proforma" className="p-1.5 rounded-lg text-neutral-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"><Printer className="w-3.5 h-3.5" /></button>
                         {o.status !== 'cancelled' && (
                           <button onClick={() => openEdit(o)} title="Edit" className="p-1.5 rounded-lg text-neutral-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
+                        )}
+                        {o.status !== 'cancelled' && o.status !== 'delivered' && (
+                          <button onClick={() => setCancelSOTarget(o)} title="Cancel Order" className="p-1.5 rounded-lg text-neutral-400 hover:text-error-600 hover:bg-error-50 transition-colors"><XCircle className="w-3.5 h-3.5" /></button>
                         )}
                         <button onClick={() => initiateDelete(o)} title="Delete" className="p-1.5 rounded-lg text-neutral-400 hover:text-error-600 hover:bg-error-50 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
@@ -1041,6 +1081,21 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={!!cancelSOTarget}
+        onClose={() => setCancelSOTarget(null)}
+        onConfirm={async () => {
+          if (!cancelSOTarget) return;
+          await supabase.from('sales_orders').update({ status: 'cancelled' }).eq('id', cancelSOTarget.id);
+          setCancelSOTarget(null);
+          loadData();
+        }}
+        title="Cancel Sales Order"
+        message={cancelSOTarget ? `Cancel order ${cancelSOTarget.so_number} for ${cancelSOTarget.customer_name}? This cannot be undone.` : ''}
+        confirmLabel="Yes, Cancel"
+        isDanger
+      />
 
       {/* Full-screen print preview — same UX as Invoice */}
       {showPrint && printOrder && (

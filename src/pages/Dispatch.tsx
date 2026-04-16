@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Truck, Plus, CreditCard as Edit2, Search, CheckCircle, Clock, ArrowRight, Hash, Warehouse, AlertCircle, Lock } from 'lucide-react';
+import { Truck, Plus, CreditCard as Edit2, Search, CheckCircle, Clock, ArrowRight, Hash, Warehouse, AlertCircle, Lock, Download, X, XCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { formatDate } from '../lib/utils';
+import { formatDate, exportToCSV } from '../lib/utils';
 import { fetchGodowns } from '../services/godownService';
 import type { DispatchEntry, DeliveryChallan, Godown } from '../types';
 import type { ActivePage } from '../types';
 import Modal from '../components/ui/Modal';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import StatusBadge from '../components/ui/StatusBadge';
 
 const DISPATCH_MODES = ['Bus', 'Tempo', 'Courier', 'Hand Delivery', 'Other'];
@@ -60,6 +61,9 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [filterCustomer, setFilterCustomer] = useState('');
+  const [filterFrom, setFilterFrom] = useState('');
+  const [filterTo, setFilterTo] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<DispatchEntry | null>(null);
   const [form, setForm] = useState<DispatchFormData>(emptyForm);
@@ -67,6 +71,9 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
   const [soOptions, setSoOptions] = useState<SOOption[]>([]);
   const [invOptions, setInvOptions] = useState<InvOption[]>([]);
   const [godowns, setGodowns] = useState<Godown[]>([]);
+  const [cancelTarget, setCancelTarget] = useState<DispatchEntry | null>(null);
+  const [soMap, setSoMap] = useState<Record<string, string>>({});
+  const [invMap, setInvMap] = useState<Record<string, string>>({});
 
   useEffect(() => { loadDispatches(); loadOptions(); loadGodownsList(); }, []);
 
@@ -117,6 +124,12 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
     ]);
     setSoOptions(soRes.data || []);
     setInvOptions(invRes.data || []);
+    const sm: Record<string, string> = {};
+    (soRes.data || []).forEach((s: { id: string; so_number: string }) => { sm[s.id] = s.so_number; });
+    setSoMap(sm);
+    const im: Record<string, string> = {};
+    (invRes.data || []).forEach((i: { id: string; invoice_number: string }) => { im[i.id] = i.invoice_number; });
+    setInvMap(im);
   };
 
   const openAdd = () => {
@@ -210,11 +223,45 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
     await loadDispatches();
   };
 
+  const cancelDispatch = async (d: DispatchEntry) => {
+    await supabase.from('dispatch_entries').update({ status: 'cancelled', updated_at: new Date().toISOString() }).eq('id', d.id);
+    setCancelTarget(null);
+    await loadDispatches();
+  };
+
+  const updateStatus = async (d: DispatchEntry, newStatus: string) => {
+    await supabase.from('dispatch_entries').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', d.id);
+    if (newStatus === 'delivered' && d.sales_order_id) {
+      await supabase.from('sales_orders').update({ status: 'delivered' }).eq('id', d.sales_order_id);
+    }
+    await loadDispatches();
+  };
+
+  const uniqueCustomers = [...new Set(dispatches.map(d => d.customer_name).filter(Boolean))].sort();
+
   const filtered = dispatches.filter(d => {
     const matchSearch = !search || (d.dispatch_number?.toLowerCase().includes(search.toLowerCase())) || (d.customer_name?.toLowerCase().includes(search.toLowerCase())) || (d.lr_number?.toLowerCase().includes(search.toLowerCase()));
     const matchStatus = filterStatus === 'all' || d.status === filterStatus;
-    return matchSearch && matchStatus;
+    const matchCustomer = !filterCustomer || d.customer_name === filterCustomer;
+    const matchFrom = !filterFrom || d.dispatch_date >= filterFrom;
+    const matchTo = !filterTo || d.dispatch_date <= filterTo;
+    return matchSearch && matchStatus && matchCustomer && matchFrom && matchTo;
   });
+
+  const handleExport = () => {
+    exportToCSV(filtered.map(d => ({
+      'Dispatch #': d.dispatch_number,
+      Customer: d.customer_name || '',
+      Mode: d.dispatch_mode || '',
+      Transport: d.transport_name || '',
+      'LR/Tracking': d.lr_number || '',
+      'Dispatch Date': d.dispatch_date,
+      'Expected Delivery': d.expected_delivery_date || '',
+      Status: d.status,
+      Reference: d.sales_order_id ? `SO: ${soMap[d.sales_order_id] || d.sales_order_id}` : d.invoice_id ? `INV: ${invMap[d.invoice_id] || d.invoice_id}` : '',
+      Notes: d.notes || '',
+    })), 'dispatch');
+  };
 
   const statusCounts = {
     pending: dispatches.filter(d => d.status === 'pending').length,
@@ -286,15 +333,32 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
         )}
 
         <div className="card">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="relative flex-1 max-w-xs">
+          <div className="flex items-center gap-2 mb-4 flex-wrap">
+            <div className="relative flex-1 min-w-[160px]">
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
-              <input type="text" placeholder="Search dispatch, LR, customer..." value={search} onChange={e => setSearch(e.target.value)} className="input-field pl-8 text-xs py-1.5" />
+              <input type="text" placeholder="Search dispatch, LR, customer..." value={search} onChange={e => setSearch(e.target.value)} className="input-field pl-8 text-xs py-1.5 w-full" />
             </div>
+            <select value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)} className="input-field text-xs py-1.5 w-40">
+              <option value="">All Customers</option>
+              {uniqueCustomers.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
             <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="input-field text-xs py-1.5 w-36">
               <option value="all">All Status</option>
               {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
             </select>
+            <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="input-field text-xs py-1.5 w-36" title="From date" />
+            <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="input-field text-xs py-1.5 w-36" title="To date" />
+            {(filterCustomer || filterStatus !== 'all' || filterFrom || filterTo || search) && (
+              <button onClick={() => { setFilterCustomer(''); setFilterStatus('all'); setFilterFrom(''); setFilterTo(''); setSearch(''); }} className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 transition-colors" title="Clear filters">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-xs text-neutral-400">{filtered.length} record{filtered.length !== 1 ? 's' : ''}</span>
+              <button onClick={handleExport} className="btn-secondary text-xs flex items-center gap-1.5 py-1.5">
+                <Download className="w-3.5 h-3.5" /> Export
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -329,10 +393,10 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
                 <tbody>
                   {filtered.map(d => {
                     const isDelivered = d.status === 'delivered';
-                    const isReturned = d.status === 'returned';
-                    const isLocked = isDelivered || isReturned;
+                    const isCancelled = d.status === 'cancelled';
+                    const isLocked = isDelivered || isCancelled;
                     return (
-                      <tr key={d.id} className={`border-b border-neutral-50 hover:bg-neutral-50 transition-colors ${isDelivered ? 'opacity-75' : ''}`}>
+                      <tr key={d.id} className={`border-b border-neutral-50 hover:bg-neutral-50 transition-colors ${isLocked ? 'opacity-60' : ''}`}>
                         <td className="table-cell font-medium text-primary-700 font-mono text-xs">{d.dispatch_number}</td>
                         <td className="table-cell font-medium text-neutral-800">{d.customer_name || '—'}</td>
                         <td className="table-cell text-xs text-neutral-500">
@@ -355,18 +419,30 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
                         <td className="table-cell text-xs text-neutral-600">{formatDate(d.dispatch_date)}</td>
                         <td className="table-cell text-xs text-neutral-500">{d.expected_delivery_date ? formatDate(d.expected_delivery_date) : '—'}</td>
                         <td className="table-cell">
-                          <span className={`badge capitalize ${getStatusColor(d.status)}`}>{d.status.replace('_', ' ')}</span>
+                          {isLocked ? (
+                            <span className={`badge capitalize ${getStatusColor(d.status)}`}>{d.status.replace('_', ' ')}</span>
+                          ) : (
+                            <select
+                              value={d.status}
+                              onChange={e => updateStatus(d, e.target.value)}
+                              className={`text-xs rounded-lg border px-2 py-1 font-medium cursor-pointer ${getStatusColor(d.status)} border-transparent`}
+                            >
+                              {STATUS_OPTIONS.filter(s => s !== 'cancelled').map(s => (
+                                <option key={s} value={s}>{s.replace('_', ' ')}</option>
+                              ))}
+                            </select>
+                          )}
                         </td>
                         <td className="table-cell">
                           <div className="flex flex-col gap-0.5">
                             {d.sales_order_id && (
                               <span className="text-[10px] font-medium bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded w-fit">
-                                Sales Order
+                                SO: {soMap[d.sales_order_id] || 'Sales Order'}
                               </span>
                             )}
                             {d.invoice_id && (
                               <span className="text-[10px] font-medium bg-green-50 text-green-700 px-1.5 py-0.5 rounded w-fit">
-                                Invoice
+                                INV: {invMap[d.invoice_id] || 'Invoice'}
                               </span>
                             )}
                             {!d.sales_order_id && !d.invoice_id && <span className="text-neutral-300 text-xs">—</span>}
@@ -377,15 +453,15 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
                             {isLocked ? (
                               <span className="flex items-center gap-1 text-[10px] text-neutral-400 px-1.5 py-1">
                                 <Lock className="w-3 h-3" />
-                                {isDelivered ? 'Delivered' : 'Returned'}
+                                {isDelivered ? 'Delivered' : 'Cancelled'}
                               </span>
                             ) : (
                               <>
                                 <button onClick={() => openEdit(d)} title="Edit dispatch" className="p-1.5 rounded hover:bg-neutral-100 text-neutral-500 hover:text-primary-600 transition-colors">
                                   <Edit2 className="w-3 h-3" />
                                 </button>
-                                <button onClick={() => markDelivered(d)} className="flex items-center gap-1 px-2 py-1 rounded text-[10px] bg-success-50 text-success-700 hover:bg-success-100 transition-colors">
-                                  <CheckCircle className="w-3 h-3" /> Delivered
+                                <button onClick={() => setCancelTarget(d)} title="Cancel dispatch" className="p-1.5 rounded hover:bg-error-50 text-neutral-400 hover:text-error-600 transition-colors">
+                                  <XCircle className="w-3 h-3" />
                                 </button>
                               </>
                             )}
@@ -400,6 +476,16 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={!!cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        onConfirm={() => cancelTarget && cancelDispatch(cancelTarget)}
+        title="Cancel Dispatch"
+        message={cancelTarget ? `Are you sure you want to cancel dispatch ${cancelTarget.dispatch_number}? This cannot be undone.` : ''}
+        confirmLabel="Cancel Dispatch"
+        isDanger
+      />
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Dispatch' : 'New Dispatch Entry'} maxWidth="max-w-2xl">
         <div className="space-y-4">

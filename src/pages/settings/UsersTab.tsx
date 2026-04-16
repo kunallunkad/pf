@@ -234,10 +234,9 @@ export default function UsersTab() {
                   >
                     {resetEmail === u.email && resetSent ? <CheckCircle className="w-3 h-3 text-success-500" /> : <RefreshCw className="w-3 h-3" />}
                   </button>
-                  {/* Direct password change */}
                   {pwdDone === u.id
                     ? <CheckCircle className="w-4 h-4 text-success-500" />
-                    : <button onClick={() => { setChangePwdId(u.id); setNewPwd(''); setPwdError(''); }}
+                    : <button onClick={() => { setChangePwdId(changePwdId === u.id ? null : u.id); setNewPwd(''); setPwdError(''); }}
                         title="Set new password"
                         className="p-1.5 rounded-lg text-neutral-400 hover:text-warning-600 hover:bg-warning-50 transition-colors">
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
@@ -245,8 +244,9 @@ export default function UsersTab() {
                   }
                 </div>
               )}
+            </div>
 
-            {/* Inline password change form */}
+            {/* Inline password change form — OUTSIDE flex row */}
             {changePwdId === u.id && (
               <div className="mt-3 border-t border-neutral-100 pt-3">
                 <p className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wide mb-2">
@@ -271,7 +271,6 @@ export default function UsersTab() {
                 {pwdError && <p className="text-xs text-error-600 mt-1.5 font-medium">{pwdError}</p>}
               </div>
             )}
-            </div>
 
             {/* Role description shown when editing */}
             {editId === u.id && (

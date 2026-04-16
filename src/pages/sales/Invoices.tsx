@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Search, CreditCard, FileText, Download, Printer, Pencil, Trash2, Eye, Warehouse, CheckCircle } from 'lucide-react';
+import { Plus, Search, CreditCard, FileText, Download, Printer, Pencil, Trash2, Eye, Warehouse, CheckCircle, XCircle, X } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDate, formatDateInput, generateId, nextDocNumber, exportToCSV } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
@@ -38,6 +38,11 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
+  const [filterCustomer, setFilterCustomer] = useState('');
+  const [filterFrom, setFilterFrom] = useState('');
+  const [filterTo, setFilterTo] = useState('');
+  const [cancelTarget, setCancelTarget] = useState<Invoice | null>(null);
+  const [viewRelated, setViewRelated] = useState<{dispatches: {dispatch_number: string; status: string}[]; payments: {amount: number; payment_date: string; payment_mode: string}[]}>({ dispatches: [], payments: [] });
   const [showSOSelectModal, setShowSOSelectModal] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showPrint, setShowPrint] = useState(false);
@@ -603,8 +608,12 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
   };
 
   const openView = async (inv: Invoice) => {
-    const { data: itemsData } = await supabase.from('invoice_items').select('*').eq('invoice_id', inv.id);
-    setViewItems((itemsData || []).map(i => ({
+    const [itemsRes, dispatchRes, paymentsRes] = await Promise.all([
+      supabase.from('invoice_items').select('*').eq('invoice_id', inv.id),
+      supabase.from('dispatch_entries').select('dispatch_number, status').eq('invoice_id', inv.id),
+      supabase.from('invoice_payments').select('amount, payment_date, payment_mode').eq('invoice_id', inv.id).order('payment_date'),
+    ]);
+    setViewItems((itemsRes.data || []).map(i => ({
       product_id: i.product_id || '',
       product_name: i.product_name,
       description: i.description || '',
@@ -615,6 +624,10 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
       tax_pct: String(i.tax_pct),
       total_price: i.total_price,
     })));
+    setViewRelated({
+      dispatches: dispatchRes.data || [],
+      payments: paymentsRes.data || [],
+    });
     setSelectedInvoice(inv);
     setShowViewModal(true);
   };
@@ -823,13 +836,18 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
 
   const filtered = invoices.filter(i => {
     const matchSearch = i.customer_name.toLowerCase().includes(search.toLowerCase()) || i.invoice_number.toLowerCase().includes(search.toLowerCase());
-    // "All" tab hides cancelled; "Cancelled" tab shows only cancelled
     const matchStatus = statusFilter === 'All'
       ? i.status !== 'cancelled'
       : i.status === statusFilter.toLowerCase();
     const matchDate = i.invoice_date >= dateRange.from && i.invoice_date <= dateRange.to;
-    return matchSearch && matchStatus && matchDate;
+    const matchCustomer = !filterCustomer || i.customer_name === filterCustomer;
+    const matchFrom = !filterFrom || i.invoice_date >= filterFrom;
+    const matchTo = !filterTo || i.invoice_date <= filterTo;
+    return matchSearch && matchStatus && matchDate && matchCustomer && matchFrom && matchTo;
   });
+
+  const uniqueCustomers = [...new Set(invoices.map(i => i.customer_name))].sort();
+  const hasActiveFilters = filterCustomer || filterFrom || filterTo;
 
   const totalOutstanding = invoices.filter(i => i.status !== 'cancelled').reduce((s, i) => s + (i.outstanding_amount || 0), 0);
   const paidThisMonth = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.total_amount, 0);
@@ -886,13 +904,32 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {STATUSES.map(s => (
             <button key={s} onClick={() => setStatusFilter(s)}
               className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${statusFilter === s ? 'bg-primary-600 text-white' : 'bg-white border border-neutral-200 text-neutral-600 hover:bg-neutral-50'}`}>
               {s}
             </button>
           ))}
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap bg-white border border-neutral-100 rounded-xl px-3 py-2">
+          <select value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)} className="input text-xs w-44 py-1">
+            <option value="">All Customers</option>
+            {uniqueCustomers.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <div className="flex items-center gap-1 text-xs text-neutral-400">
+            <span>From</span>
+            <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="input text-xs py-1 w-32" />
+            <span>To</span>
+            <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="input text-xs py-1 w-32" />
+          </div>
+          {hasActiveFilters && (
+            <button onClick={() => { setFilterCustomer(''); setFilterFrom(''); setFilterTo(''); }} className="flex items-center gap-1 text-xs text-neutral-400 hover:text-error-600 transition-colors">
+              <X className="w-3 h-3" /> Clear
+            </button>
+          )}
+          <span className="text-[10px] text-neutral-400 ml-auto">{filtered.length} record{filtered.length !== 1 ? 's' : ''}</span>
         </div>
 
         <div className="card p-0 overflow-hidden">
@@ -979,9 +1016,9 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
                           </button>
                         )}
                         {inv.status !== 'paid' && inv.status !== 'cancelled' && (
-                          <button onClick={() => openDelete(inv)} title="Cancel Invoice"
-                            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-50 text-red-500 transition-colors">
-                            <Trash2 className="w-3.5 h-3.5" />
+                          <button onClick={() => setCancelTarget(inv)} title="Cancel Invoice"
+                            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-error-50 text-neutral-400 hover:text-error-600 transition-colors">
+                            <XCircle className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
@@ -1188,6 +1225,43 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
               <div>
                 <p className="label">Notes</p>
                 <p className="text-sm text-neutral-600">{selectedInvoice.notes}</p>
+              </div>
+            )}
+
+            {(viewRelated.dispatches.length > 0 || viewRelated.payments.length > 0) && (
+              <div className="border-t border-neutral-100 pt-4">
+                <p className="text-sm font-semibold text-neutral-700 mb-3">Related Records</p>
+                <div className="grid grid-cols-2 gap-4">
+                  {viewRelated.dispatches.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-2">Dispatch Entries</p>
+                      <div className="space-y-1">
+                        {viewRelated.dispatches.map((d, i) => (
+                          <div key={i} className="flex items-center justify-between px-2 py-1.5 bg-neutral-50 rounded-lg">
+                            <span className="text-xs font-medium text-neutral-700">{d.dispatch_number}</span>
+                            <StatusBadge status={d.status} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {viewRelated.payments.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-2">Payments Recorded</p>
+                      <div className="space-y-1">
+                        {viewRelated.payments.map((p, i) => (
+                          <div key={i} className="flex items-center justify-between px-2 py-1.5 bg-success-50 rounded-lg">
+                            <div>
+                              <span className="text-xs font-semibold text-success-700">{formatCurrency(p.amount)}</span>
+                              <span className="text-[10px] text-neutral-400 ml-1.5">{p.payment_mode}</span>
+                            </div>
+                            <span className="text-[10px] text-neutral-500">{formatDate(p.payment_date)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -1535,6 +1609,22 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
         confirmLabel="Cancel Invoice"
         isDanger
       />
+
+      <ConfirmDialog
+        isOpen={!!cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        onConfirm={async () => {
+          if (!cancelTarget) return;
+          await supabase.from('invoices').update({ status: 'cancelled', outstanding_amount: 0 }).eq('id', cancelTarget.id);
+          setCancelTarget(null);
+          loadData();
+        }}
+        title="Cancel Invoice"
+        message={cancelTarget ? `Cancel invoice ${cancelTarget.invoice_number} for ${cancelTarget.customer_name}? This cannot be undone.` : ''}
+        confirmLabel="Yes, Cancel"
+        isDanger
+      />
+
     {/* Split invoice summary */}
       {splitSummary && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
