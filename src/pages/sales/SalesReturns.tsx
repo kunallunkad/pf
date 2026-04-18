@@ -9,7 +9,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import ActionMenu, { actionView, actionEdit, actionDelete } from '../../components/ui/ActionMenu';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import type { SalesReturn, SalesReturnItem, Invoice, Product } from '../../types';
-import { postStockMovement } from '../../services/stockLedger';
+import { processStockMovement } from '../../services/stockService';
 
 interface ReturnLineItem {
   product_id: string;
@@ -239,30 +239,36 @@ export default function SalesReturns() {
   const handleProcess = async (ret: SalesReturn) => {
     let retItems = rowItems[ret.id];
     if (!retItems) {
-      const { data } = await supabase.from('sales_return_items').select('*').eq('sales_return_id', ret.id);
+      const { data, error } = await supabase.from('sales_return_items').select('*').eq('sales_return_id', ret.id);
+      if (error) throw error;
       retItems = data || [];
       setRowItems(prev => ({ ...prev, [ret.id]: retItems }));
     }
 
-    const { data: godownList } = await supabase.from('godowns').select('id').eq('is_active', true).order('name').limit(1);
+    const { data: godownList, error: gErr } = await supabase.from('godowns').select('id').eq('is_active', true).order('name').limit(1);
+    if (gErr) throw gErr;
     const defaultGodownId = godownList && godownList.length > 0 ? godownList[0].id : null;
 
-    for (const item of retItems) {
-      if (item.return_to_stock && item.product_id && defaultGodownId) {
-        await postStockMovement({
-          productId: item.product_id,
-          godownId: defaultGodownId,
-          qtyChange: item.quantity,
-          movementType: 'return',
-          referenceType: 'sales_return',
-          referenceId: ret.id,
-          referenceNumber: ret.return_number,
-          notes: 'Return ' + ret.return_number,
-        });
-      }
+    const restockItems = retItems
+      .filter(i => i.return_to_stock && i.product_id && defaultGodownId)
+      .map(i => ({
+        product_id: i.product_id as string,
+        godown_id: defaultGodownId as string,
+        quantity: i.quantity,
+      }));
+
+    if (restockItems.length > 0) {
+      await processStockMovement({
+        type: 'return',
+        items: restockItems,
+        reference_type: 'sales_return',
+        reference_id: ret.id,
+        reference_number: ret.return_number,
+        notes: 'Return ' + ret.return_number,
+      });
     }
 
-    await supabase.from('ledger_entries').insert({
+    const { error: ledgerErr } = await supabase.from('ledger_entries').insert({
       entry_date: ret.return_date,
       entry_type: 'credit',
       account_type: 'customer',
@@ -273,8 +279,10 @@ export default function SalesReturns() {
       description: 'Return ' + ret.return_number,
       amount: ret.total_amount,
     });
+    if (ledgerErr) throw ledgerErr;
 
-    await supabase.from('sales_returns').update({ status: 'processed' }).eq('id', ret.id);
+    const { error: updErr } = await supabase.from('sales_returns').update({ status: 'processed' }).eq('id', ret.id);
+    if (updErr) throw updErr;
     loadData();
   };
 

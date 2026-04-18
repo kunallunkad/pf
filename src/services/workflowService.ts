@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { updateLastRate } from '../lib/rateCardService';
-import { postStockMovement } from './stockLedger';
+import { processStockMovement } from './stockService';
 
 export async function onInvoiceCreated(invoiceId: string): Promise<{ errors: string[] }> {
   const errors: string[] = [];
@@ -13,22 +13,29 @@ export async function onInvoiceCreated(invoiceId: string): Promise<{ errors: str
 
   if (!invoice) return { errors: ['Invoice not found'] };
 
-  for (const item of invoice.items || []) {
-    const itemGodownId = item.godown_id || invoice.godown_id;
-    if (!itemGodownId || !item.product_id) continue;
+  const dispatchItems = (invoice.items || [])
+    .filter((item: { product_id?: string; godown_id?: string; quantity: number }) => {
+      const itemGodownId = item.godown_id || invoice.godown_id;
+      return !!itemGodownId && !!item.product_id;
+    })
+    .map((item: { product_id: string; godown_id?: string; quantity: number }) => ({
+      product_id: item.product_id,
+      godown_id: (item.godown_id || invoice.godown_id) as string,
+      quantity: item.quantity,
+    }));
+
+  if (dispatchItems.length > 0) {
     try {
-      await postStockMovement({
-        productId: item.product_id,
-        godownId: itemGodownId,
-        qtyChange: -item.quantity,
-        movementType: 'sale',
-        referenceType: 'invoice',
-        referenceId: invoice.id,
-        referenceNumber: invoice.invoice_number,
+      await processStockMovement({
+        type: 'dispatch',
+        items: dispatchItems,
+        reference_type: 'invoice',
+        reference_id: invoice.id,
+        reference_number: invoice.invoice_number,
         notes: `Invoice ${invoice.invoice_number}`,
       });
     } catch (e) {
-      errors.push(`${item.product_name}: ${e instanceof Error ? e.message : 'stock posting failed'}`);
+      errors.push(e instanceof Error ? e.message : 'stock posting failed');
     }
   }
 

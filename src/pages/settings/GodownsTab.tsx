@@ -5,6 +5,7 @@ import { formatCurrency } from '../../lib/utils';
 import { useAuth } from '../../contexts/AuthContext';
 import type { Godown, GodownStock } from '../../types';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import { processStockMovement } from '../../services/stockService';
 
 interface GodownFormData {
   name: string;
@@ -108,18 +109,22 @@ export default function GodownsTab() {
   };
 
   const handleAdjustSave = async () => {
-    if (!adjusting || adjusting.newQty === '') return;
-    const qty = parseFloat(adjusting.newQty);
-    if (isNaN(qty) || qty < 0) return;
+    if (!adjusting || adjusting.newQty === '' || !selectedGodown) return;
+    const target = parseFloat(adjusting.newQty);
+    if (isNaN(target) || target < 0) return;
+    const delta = target - adjusting.currentQty;
     setAdjustSaving(true);
-    await supabase.from('godown_stock').update({ quantity: qty, updated_at: new Date().toISOString() }).eq('id', adjusting.stockId);
-    const { data: allRows } = await supabase
-      .from('godown_stock').select('quantity').eq('product_id', adjusting.productId);
-    const newTotal = (allRows || []).reduce((s, r) => s + (r.quantity || 0), 0);
-    await supabase.from('products').update({ stock_quantity: newTotal }).eq('id', adjusting.productId);
+    if (delta !== 0) {
+      await processStockMovement({
+        type: 'adjustment',
+        items: [{ product_id: adjusting.productId, godown_id: selectedGodown.id, quantity: delta }],
+        reference_type: 'manual_adjustment',
+        notes: `Manual adjust — ${adjusting.productName}`,
+      });
+    }
     setAdjusting(null);
     setAdjustSaving(false);
-    if (selectedGodown) await loadGodownStock(selectedGodown.id);
+    await loadGodownStock(selectedGodown.id);
   };
 
   const filteredStock = godownStock.filter(s =>
