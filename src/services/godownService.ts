@@ -41,42 +41,6 @@ export async function getGodownStockForProduct(productId: string, godownId: stri
   return data?.quantity || 0;
 }
 
-export async function reduceGodownStock(
-  productId: string,
-  godownId: string,
-  quantity: number
-): Promise<{ error: string | null }> {
-  const current = await getGodownStockForProduct(productId, godownId);
-  if (current < quantity) {
-    return { error: `Insufficient stock. Available: ${current}` };
-  }
-  const { error } = await supabase
-    .from('godown_stock')
-    .upsert({
-      product_id: productId,
-      godown_id: godownId,
-      quantity: current - quantity,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'godown_id,product_id' });
-  return { error: error?.message || null };
-}
-
-export async function addGodownStock(
-  productId: string,
-  godownId: string,
-  quantity: number
-): Promise<void> {
-  const current = await getGodownStockForProduct(productId, godownId);
-  await supabase
-    .from('godown_stock')
-    .upsert({
-      product_id: productId,
-      godown_id: godownId,
-      quantity: current + quantity,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'godown_id,product_id' });
-}
-
 export async function createGodown(data: Partial<Godown>): Promise<Godown> {
   const { data: created, error } = await supabase
     .from('godowns')

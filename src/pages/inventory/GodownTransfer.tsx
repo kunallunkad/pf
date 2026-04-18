@@ -7,7 +7,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { useDateRange } from '../../contexts/DateRangeContext';
 import type { Godown, Product } from '../../types';
-import { postStockMovement } from '../../services/stockLedger';
+import { processStockMovement } from '../../services/stockService';
 
 interface TransferItem {
   product_id: string;
@@ -178,7 +178,7 @@ export default function GodownTransfer() {
     const toGodown = godowns.find(g => g.id === form.to_godown_id);
     const transferNumber = await nextDocNumber('TRF', supabase);
 
-    const { data: transfer } = await supabase.from('godown_transfers').insert({
+    const { data: transfer, error: transferError } = await supabase.from('godown_transfers').insert({
       transfer_number: transferNumber,
       transfer_date: form.transfer_date,
       from_godown_id: form.from_godown_id,
@@ -190,9 +190,10 @@ export default function GodownTransfer() {
       status: 'completed',
       total_items: validItems.length,
     }).select().single();
+    if (transferError) throw transferError;
 
     if (transfer) {
-      await supabase.from('godown_transfer_items').insert(
+      const { error: itemsError } = await supabase.from('godown_transfer_items').insert(
         validItems.map(item => ({
           transfer_id: transfer.id,
           product_id: item.product_id,
@@ -201,30 +202,35 @@ export default function GodownTransfer() {
           quantity: parseFloat(item.quantity),
         }))
       );
+      if (itemsError) throw itemsError;
 
-      for (const item of validItems) {
-        const qty = parseFloat(item.quantity);
-        await postStockMovement({
-          productId: item.product_id,
-          godownId: form.from_godown_id,
-          qtyChange: -qty,
-          movementType: 'out',
-          referenceType: 'godown_transfer',
-          referenceId: transfer.id,
-          referenceNumber: transferNumber,
-          notes: `Transfer out to ${toGodown?.name} (${transferNumber})`,
-        });
-        await postStockMovement({
-          productId: item.product_id,
-          godownId: form.to_godown_id,
-          qtyChange: qty,
-          movementType: 'in',
-          referenceType: 'godown_transfer',
-          referenceId: transfer.id,
-          referenceNumber: transferNumber,
-          notes: `Transfer in from ${fromGodown?.name} (${transferNumber})`,
-        });
-      }
+      const outItems = validItems.map(item => ({
+        product_id: item.product_id,
+        godown_id: form.from_godown_id,
+        quantity: parseFloat(item.quantity),
+      }));
+      const inItems = validItems.map(item => ({
+        product_id: item.product_id,
+        godown_id: form.to_godown_id,
+        quantity: parseFloat(item.quantity),
+      }));
+
+      await processStockMovement({
+        type: 'transfer_out',
+        items: outItems,
+        reference_type: 'godown_transfer',
+        reference_id: transfer.id,
+        reference_number: transferNumber,
+        notes: `Transfer out to ${toGodown?.name} (${transferNumber})`,
+      });
+      await processStockMovement({
+        type: 'transfer_in',
+        items: inItems,
+        reference_type: 'godown_transfer',
+        reference_id: transfer.id,
+        reference_number: transferNumber,
+        notes: `Transfer in from ${fromGodown?.name} (${transferNumber})`,
+      });
     }
 
     setShowModal(false);

@@ -9,6 +9,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import type { Product, StockMovement, Godown } from '../types';
 import { fetchCompanies } from '../lib/companiesService';
 import type { Company } from '../lib/companiesService';
+import { processStockMovement } from '../services/stockService';
 
 const CATEGORIES = ['All', 'Astro Products', 'Vastu Items', 'Healing Items'] as const;
 const UNITS = ['pcs', 'grams', 'kg', 'sets', 'ml', 'liters'];
@@ -148,12 +149,10 @@ export default function Inventory() {
       setImageUploading(false);
     }
     const totalW = form.is_gemstone && form.total_weight ? parseFloat(form.total_weight) || 0 : 0;
-    const totalOpening = Object.values(openingStocks).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
-    const payload = {
+    const basePayload = {
       name: form.name, category: form.category, unit: form.unit, sku: form.sku,
       purchase_price: parseFloat(form.purchase_price) || 0,
       selling_price: parseFloat(form.selling_price) || 0,
-      stock_quantity: editing ? undefined : totalOpening,
       low_stock_alert: form.low_stock_enabled ? (parseFloat(form.low_stock_alert) || 5) : 0,
       description: form.description,
       image_url: imageUrl || null,
@@ -161,56 +160,58 @@ export default function Inventory() {
       is_gemstone: form.is_gemstone,
       weight_grams: form.is_gemstone && form.weight_grams ? parseFloat(form.weight_grams) || null : null,
       total_weight: totalW,
-      remaining_weight: editing ? undefined : totalW,
       weight_unit: form.is_gemstone ? form.weight_unit : null,
       updated_at: new Date().toISOString(),
     };
     if (editing) {
-      const { stock_quantity: _sq, remaining_weight: _rw, ...editPayload } = payload;
-      await supabase.from('products').update(editPayload).eq('id', editing.id);
-      const godownStockEntries = Object.entries(editGodownStocks).map(([godownId, qtyStr]) => ({
-        godownId,
-        qty: parseFloat(qtyStr) || 0,
-      }));
-      for (const { godownId, qty } of godownStockEntries) {
-        await supabase.from('godown_stock').upsert({
-          product_id: editing.id,
-          godown_id: godownId,
-          quantity: qty,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'godown_id,product_id' });
-      }
-      const totalStock = godownStockEntries.reduce((s, { qty }) => s + qty, 0);
-      await supabase.from('products').update({ stock_quantity: totalStock }).eq('id', editing.id);
-      for (const { godownId, qty } of godownStockEntries) {
-        await supabase.from('godown_stock').upsert({
-          product_id: editing.id,
-          godown_id: godownId,
-          quantity: qty,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'godown_id,product_id' });
+      const { error: productErr } = await supabase.from('products').update(basePayload).eq('id', editing.id);
+      if (productErr) throw productErr;
+
+      const { data: currentStocks, error: currentErr } = await supabase
+        .from('godown_stock')
+        .select('godown_id, quantity')
+        .eq('product_id', editing.id);
+      if (currentErr) throw currentErr;
+      const currentMap: Record<string, number> = {};
+      (currentStocks || []).forEach(s => { currentMap[s.godown_id] = s.quantity || 0; });
+
+      const adjustItems = Object.entries(editGodownStocks)
+        .map(([godown_id, qtyStr]) => {
+          const target = parseFloat(qtyStr) || 0;
+          const current = currentMap[godown_id] || 0;
+          return { product_id: editing.id, godown_id, quantity: target - current };
+        })
+        .filter(i => i.quantity !== 0);
+
+      if (adjustItems.length > 0) {
+        await processStockMovement({
+          type: 'adjustment',
+          items: adjustItems,
+          reference_type: 'stock_edit',
+          reference_id: editing.id,
+          notes: 'Manual stock edit',
+        });
       }
     } else {
-      const { data: newProduct } = await supabase.from('products').insert(payload).select().maybeSingle();
+      const createPayload = { ...basePayload, remaining_weight: totalW };
+      const { data: newProduct, error: insertErr } = await supabase.from('products').insert(createPayload).select().maybeSingle();
+      if (insertErr) throw insertErr;
       if (newProduct) {
-        for (const [godownId, qtyStr] of Object.entries(openingStocks)) {
-          const qty = parseFloat(qtyStr) || 0;
-          if (qty > 0) {
-            await supabase.from('godown_stock').upsert({
-              product_id: newProduct.id,
-              godown_id: godownId,
-              quantity: qty,
-              updated_at: new Date().toISOString(),
-            }, { onConflict: 'godown_id,product_id' });
-            await supabase.from('stock_movements').insert({
-              product_id: newProduct.id,
-              movement_type: 'in',
-              quantity: qty,
-              godown_id: godownId,
-              notes: 'Opening stock',
-              reference_type: 'opening_stock',
-            });
-          }
+        const openingItems = Object.entries(openingStocks)
+          .map(([godown_id, qtyStr]) => ({
+            product_id: newProduct.id,
+            godown_id,
+            quantity: parseFloat(qtyStr) || 0,
+          }))
+          .filter(i => i.quantity > 0);
+        if (openingItems.length > 0) {
+          await processStockMovement({
+            type: 'adjustment',
+            items: openingItems,
+            reference_type: 'opening_stock',
+            reference_id: newProduct.id,
+            notes: 'Opening stock',
+          });
         }
       }
     }
@@ -240,66 +241,49 @@ export default function Inventory() {
     if (!selectedProduct) return;
     const qty = parseFloat(stockForm.quantity) || 0;
     const mvType = stockForm.movement_label;
-    const isIn = ['in', 'purchase', 'return'].includes(mvType);
     const godownId = stockForm.godown_id;
+    if (!godownId || qty <= 0) return;
 
-    const { data: snapshotRows } = await supabase
-      .from('godown_stock')
-      .select('godown_id, quantity')
-      .eq('product_id', selectedProduct.id);
-    const snapshot: Record<string, number> = {};
-    for (const row of snapshotRows || []) {
-      snapshot[row.godown_id] = row.quantity || 0;
-    }
+    const isIn = ['purchase', 'return'].includes(mvType);
 
-    if (godownId) {
-      const currentGodownQty = snapshot[godownId] || 0;
-      let newGodownQty: number;
-      if (mvType === 'adjustment') {
-        newGodownQty = qty;
-      } else if (isIn) {
-        newGodownQty = currentGodownQty + qty;
-      } else {
-        newGodownQty = Math.max(0, currentGodownQty - qty);
+    if (mvType === 'adjustment') {
+      const { data: row } = await supabase
+        .from('godown_stock')
+        .select('quantity')
+        .eq('product_id', selectedProduct.id)
+        .eq('godown_id', godownId)
+        .maybeSingle();
+      const current = row?.quantity || 0;
+      const delta = qty - current;
+      if (delta !== 0) {
+        await processStockMovement({
+          type: 'adjustment',
+          items: [{ product_id: selectedProduct.id, godown_id: godownId, quantity: delta }],
+          reference_type: 'manual_adjustment',
+          notes: stockForm.notes,
+        });
       }
-      snapshot[godownId] = newGodownQty;
-      await supabase.from('godown_stock').upsert({
-        product_id: selectedProduct.id,
-        godown_id: godownId,
-        quantity: newGodownQty,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'godown_id,product_id' });
+    } else {
+      const type = mvType === 'purchase' ? 'purchase' : mvType === 'return' ? 'return' : 'dispatch';
+      await processStockMovement({
+        type,
+        items: [{ product_id: selectedProduct.id, godown_id: godownId, quantity: qty }],
+        reference_type: 'manual_stock_update',
+        notes: stockForm.notes,
+      });
     }
 
-    const newTotalQty = Object.values(snapshot).reduce((s, q) => s + q, 0);
-    const updates: Record<string, unknown> = { stock_quantity: newTotalQty, updated_at: new Date().toISOString() };
     if (selectedProduct.is_gemstone && selectedProduct.total_weight) {
-      const weightAmt = qty;
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
       if (isIn) {
-        updates.remaining_weight = (selectedProduct.remaining_weight || 0) + weightAmt;
-        updates.total_weight = (selectedProduct.total_weight || 0) + (mvType === 'purchase' ? weightAmt : 0);
+        updates.remaining_weight = (selectedProduct.remaining_weight || 0) + qty;
+        updates.total_weight = (selectedProduct.total_weight || 0) + (mvType === 'purchase' ? qty : 0);
       } else if (mvType !== 'adjustment') {
-        updates.remaining_weight = Math.max(0, (selectedProduct.remaining_weight || 0) - weightAmt);
+        updates.remaining_weight = Math.max(0, (selectedProduct.remaining_weight || 0) - qty);
       }
-    }
-    await supabase.from('products').update(updates).eq('id', selectedProduct.id);
-
-    for (const [gId, gQty] of Object.entries(snapshot)) {
-      await supabase.from('godown_stock').upsert({
-        product_id: selectedProduct.id,
-        godown_id: gId,
-        quantity: gQty,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'godown_id,product_id' });
+      await supabase.from('products').update(updates).eq('id', selectedProduct.id);
     }
 
-    await supabase.from('stock_movements').insert({
-      product_id: selectedProduct.id,
-      movement_type: mvType,
-      quantity: qty,
-      godown_id: godownId || null,
-      notes: stockForm.notes,
-    });
     setShowStockModal(false);
     loadData();
   };

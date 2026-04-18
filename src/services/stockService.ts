@@ -1,10 +1,30 @@
 import { supabase } from '../lib/supabase';
 
-export type StockMovementType = 'purchase' | 'dispatch' | 'adjustment';
+/**
+ * StockMovementType — semantic operation type.
+ *
+ * purchase      — receiving stock from a supplier (+qty)
+ * dispatch      — outbound on sale (-qty)
+ * return        — customer return into stock (+qty)
+ * adjustment    — signed delta for opening stock / physical count correction
+ * transfer_in   — second leg of a godown transfer (+qty)
+ * transfer_out  — first leg of a godown transfer (-qty)
+ */
+export type StockMovementType =
+  | 'purchase'
+  | 'dispatch'
+  | 'return'
+  | 'adjustment'
+  | 'transfer_in'
+  | 'transfer_out';
 
 export interface StockMovementItem {
   product_id: string;
   godown_id: string;
+  /**
+   * For purchase / dispatch / return / transfer_in / transfer_out: magnitude (>= 0).
+   * For adjustment: signed delta (may be negative).
+   */
   quantity: number;
   unit_price?: number;
 }
@@ -18,18 +38,41 @@ export interface ProcessStockMovementArgs {
   notes?: string;
 }
 
-const MOVEMENT_TYPE_MAP: Record<StockMovementType, string> = {
+/** Maps our semantic type to the `movement_type` column value stored in stock_movements. */
+const MOVEMENT_TYPE_COLUMN: Record<StockMovementType, string> = {
   purchase: 'purchase',
   dispatch: 'sale',
+  return: 'return',
   adjustment: 'adjustment',
+  transfer_in: 'in',
+  transfer_out: 'out',
 };
 
-function deltaFor(type: StockMovementType, quantity: number): number {
-  if (type === 'purchase') return quantity;
-  if (type === 'dispatch') return -quantity;
-  return quantity;
+function signedDelta(type: StockMovementType, quantity: number): number {
+  switch (type) {
+    case 'purchase':
+    case 'return':
+    case 'transfer_in':
+      return Math.abs(quantity);
+    case 'dispatch':
+    case 'transfer_out':
+      return -Math.abs(quantity);
+    case 'adjustment':
+      return quantity; // caller-signed
+  }
 }
 
+/**
+ * The ONE and ONLY entry point for stock changes from application code.
+ *
+ * Every item is routed through the `post_stock_movement` Postgres RPC,
+ * which atomically:
+ *   1. upserts godown_stock with delta arithmetic
+ *   2. raises exception if the resulting quantity would be negative
+ *   3. inserts into stock_movements
+ *
+ * No caller may touch godown_stock or stock_movements directly.
+ */
 export async function processStockMovement({
   type,
   items,
@@ -40,51 +83,26 @@ export async function processStockMovement({
 }: ProcessStockMovementArgs): Promise<void> {
   if (!items || items.length === 0) return;
 
-  if (type === 'dispatch') {
-    for (const item of items) {
-      if (!item.product_id || !item.godown_id) {
-        throw new Error('product_id and godown_id are required for dispatch');
-      }
-      const { data, error } = await supabase
-        .from('godown_stock')
-        .select('quantity')
-        .eq('product_id', item.product_id)
-        .eq('godown_id', item.godown_id)
-        .maybeSingle();
-      if (error) throw error;
-      const available = data?.quantity ?? 0;
-      if (available < item.quantity) {
-        throw new Error(
-          `Insufficient stock for product ${item.product_id} in godown ${item.godown_id}: ` +
-          `requested ${item.quantity}, available ${available}`
-        );
-      }
-    }
-  }
-
   for (const item of items) {
     if (!item.product_id || !item.godown_id) {
-      throw new Error('product_id and godown_id are required');
+      throw new Error('product_id and godown_id are required for every stock item');
     }
-    const delta = deltaFor(type, item.quantity);
+    if (type !== 'adjustment' && item.quantity <= 0) {
+      throw new Error(`quantity must be positive for ${type}; got ${item.quantity}`);
+    }
 
-    const { error: rpcErr } = await supabase.rpc('update_godown_stock', {
+    const delta = signedDelta(type, item.quantity);
+
+    const { error } = await supabase.rpc('post_stock_movement', {
       p_product_id: item.product_id,
       p_godown_id: item.godown_id,
-      p_delta: delta,
+      p_qty_change: delta,
+      p_movement_type: MOVEMENT_TYPE_COLUMN[type],
+      p_reference_type: reference_type ?? null,
+      p_reference_id: reference_id ?? null,
+      p_reference_number: reference_number ?? null,
+      p_notes: notes ?? null,
     });
-    if (rpcErr) throw rpcErr;
-
-    const { error: movementErr } = await supabase.from('stock_movements').insert({
-      product_id: item.product_id,
-      godown_id: item.godown_id,
-      movement_type: MOVEMENT_TYPE_MAP[type],
-      quantity: Math.abs(item.quantity),
-      reference_type: reference_type ?? null,
-      reference_id: reference_id ?? null,
-      reference_number: reference_number ?? null,
-      notes: notes ?? null,
-    });
-    if (movementErr) throw movementErr;
+    if (error) throw error;
   }
 }
