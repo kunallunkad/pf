@@ -229,6 +229,8 @@ export interface SalesOrder {
   discount_amount: number;
   total_amount: number;
   notes?: string;
+  is_b2b?: boolean;
+  ship_to_customer_id?: string | null;
   items?: SalesOrderItem[];
   created_at: string;
 }

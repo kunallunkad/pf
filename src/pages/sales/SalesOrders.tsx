@@ -68,6 +68,8 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
     so_date: new Date().toISOString().split('T')[0], delivery_date: '',
     courier_charges: '0', discount_amount: '0', notes: '',
     godown_id: '',
+    is_b2b: false,
+    ship_to_customer_id: '',
   });
   const [items, setItems] = useState<LineItem[]>([{ product_id: '', product_name: '', unit: 'pcs', quantity: '1', unit_price: '', discount_pct: '0', total_price: 0, godown_id: '' }]);
 
@@ -211,6 +213,10 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
       alert('Please select a customer.');
       return;
     }
+    if (form.is_b2b && !form.ship_to_customer_id) {
+      alert('B2B orders require a Ship To customer.');
+      return;
+    }
     try {
       const soNumber = await nextDocNumber('SO', supabase);
       const firstProdId = itemsWithProduct[0].product_id;
@@ -233,6 +239,8 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
         notes: form.notes,
         godown_id: form.godown_id || null,
         company_id: soCompanyId,
+        is_b2b: form.is_b2b,
+        ship_to_customer_id: form.is_b2b ? (form.ship_to_customer_id || null) : null,
         items: itemsWithProduct.map(i => ({
           product_id: i.product_id,
           product_name: i.product_name,
@@ -259,6 +267,10 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
       alert(`Please select a godown for every product line. ${missingGodown.length} line(s) have no godown assigned.`);
       return;
     }
+    if (form.is_b2b && !form.ship_to_customer_id) {
+      alert('B2B orders require a Ship To customer.');
+      return;
+    }
     try {
       const { error: updateErr } = await supabase.from('sales_orders').update({
         customer_id: form.customer_id || null,
@@ -276,6 +288,8 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
         subtotal,
         total_amount: total,
         notes: form.notes,
+        is_b2b: form.is_b2b,
+        ship_to_customer_id: form.is_b2b ? (form.ship_to_customer_id || null) : null,
       }).eq('id', editOrder.id);
       if (updateErr) throw updateErr;
       const { error: delItemsErr } = await supabase.from('sales_order_items').delete().eq('sales_order_id', editOrder.id);
@@ -320,6 +334,9 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
       courier_charges: String(order.courier_charges || 0),
       discount_amount: String(order.discount_amount || 0),
       notes: order.notes || '',
+      godown_id: '',
+      is_b2b: order.is_b2b || false,
+      ship_to_customer_id: order.ship_to_customer_id || '',
     });
     setItems(
       existingItems && existingItems.length > 0
@@ -492,7 +509,7 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
           </button>
           <button onClick={() => {
             setEditOrder(null);
-            setForm({ customer_id: '', customer_name: '', customer_phone: '', customer_address: '', customer_address2: '', customer_city: '', customer_state: '', customer_pincode: '', so_date: new Date().toISOString().split('T')[0], delivery_date: '', courier_charges: '0', discount_amount: '0', notes: '', godown_id: godowns[0]?.id || '' });
+            setForm({ customer_id: '', customer_name: '', customer_phone: '', customer_address: '', customer_address2: '', customer_city: '', customer_state: '', customer_pincode: '', so_date: new Date().toISOString().split('T')[0], delivery_date: '', courier_charges: '0', discount_amount: '0', notes: '', godown_id: godowns[0]?.id || '', is_b2b: false, ship_to_customer_id: '' });
             setGodownStockMap({});
             setItems([{ product_id: '', product_name: '', unit: 'pcs', quantity: '1', unit_price: '', discount_pct: '0', total_price: 0, godown_id: '' }]);
             setShowModal(true);
@@ -673,17 +690,33 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
           </>
         }>
         <div className="space-y-3">
+          {/* Mode toggle */}
+          <div className="flex items-center gap-3">
+            <label className="label mb-0">Mode</label>
+            <div className="flex rounded-lg border border-neutral-200 overflow-hidden text-xs font-medium">
+              <button
+                type="button"
+                onClick={() => setForm(f => ({ ...f, is_b2b: false, ship_to_customer_id: '' }))}
+                className={`px-3 py-1.5 transition-colors ${!form.is_b2b ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`}
+              >Normal</button>
+              <button
+                type="button"
+                onClick={() => setForm(f => ({ ...f, is_b2b: true }))}
+                className={`px-3 py-1.5 transition-colors ${form.is_b2b ? 'bg-blue-600 text-white' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`}
+              >B2B</button>
+            </div>
+          </div>
           {/* Row 1: Order meta — 4 fields in one line */}
           <div className="grid grid-cols-4 gap-2">
             <div>
-              <label className="label">Customer</label>
+              <label className="label">{form.is_b2b ? 'Bill To' : 'Customer'}</label>
               <select value={form.customer_id} onChange={e => handleCustomerChange(e.target.value)} className="input text-xs">
                 <option value="">-- Select --</option>
                 {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="label">Customer Name *</label>
+              <label className="label">{form.is_b2b ? 'Bill To Name *' : 'Customer Name *'}</label>
               <input value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} className="input text-xs" placeholder="Full name" />
             </div>
             <div>
@@ -722,6 +755,26 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
               <input value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))} className="input text-xs" placeholder="+91..." />
             </div>
           </div>
+
+          {/* Ship To — only shown in B2B mode */}
+          {form.is_b2b && (
+            <div className="grid grid-cols-4 gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2.5">
+              <div className="col-span-2">
+                <label className="label text-blue-700">Ship To Customer <span className="text-error-500">*</span></label>
+                <select
+                  value={form.ship_to_customer_id}
+                  onChange={e => setForm(f => ({ ...f, ship_to_customer_id: e.target.value }))}
+                  className="input text-xs border-blue-200 focus:ring-blue-400"
+                >
+                  <option value="">-- Select Ship To --</option>
+                  {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="col-span-2 flex items-end">
+                <p className="text-[10px] text-blue-500 leading-relaxed">In B2B mode, goods ship directly to this customer. The Bill To customer above is invoiced.</p>
+              </div>
+            </div>
+          )}
 
           <div>
             <div className="flex items-center justify-between mb-2">

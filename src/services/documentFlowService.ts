@@ -28,6 +28,8 @@ export interface CreateSalesOrderPayload {
   notes?: string;
   godown_id?: string | null;
   company_id?: string | null;
+  is_b2b?: boolean;
+  ship_to_customer_id?: string | null;
   items: SalesOrderItemInput[];
 }
 
