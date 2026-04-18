@@ -78,6 +78,7 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [deliverTarget, setDeliverTarget] = useState<{ entry: DispatchEntry; newStatus: string } | null>(null);
+  const [b2bMap, setB2bMap] = useState<Record<string, { billTo: string; shipTo: string }>>({});
 
   useEffect(() => { loadDispatches(); loadOptions(); loadGodownsList(); }, []);
 
@@ -119,7 +120,43 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
       .select('*')
       .order('dispatch_date', { ascending: false })
       .order('created_at', { ascending: false });
-    setDispatches((data || []) as DispatchEntry[]);
+    const entries = (data || []) as DispatchEntry[];
+    setDispatches(entries);
+
+    const soIds = [...new Set(entries.map(e => e.sales_order_id).filter(Boolean))] as string[];
+    if (soIds.length > 0) {
+      const { data: soRows } = await supabase
+        .from('sales_orders')
+        .select('id, is_b2b, customer_name, ship_to_customer_id')
+        .in('id', soIds);
+
+      const shipToIds = [...new Set((soRows || []).map((s: { ship_to_customer_id?: string | null }) => s.ship_to_customer_id).filter(Boolean))] as string[];
+      let shipToNames: Record<string, string> = {};
+      if (shipToIds.length > 0) {
+        const { data: custRows } = await supabase
+          .from('customers')
+          .select('id, name')
+          .in('id', shipToIds);
+        (custRows || []).forEach((c: { id: string; name: string }) => { shipToNames[c.id] = c.name; });
+      }
+
+      const map: Record<string, { billTo: string; shipTo: string }> = {};
+      (soRows || []).forEach((so: { id: string; is_b2b: boolean; customer_name: string; ship_to_customer_id?: string | null }) => {
+        if (so.is_b2b && so.ship_to_customer_id) {
+          const dispatchEntry = entries.find(e => e.sales_order_id === so.id);
+          if (dispatchEntry) {
+            map[dispatchEntry.id] = {
+              billTo: so.customer_name,
+              shipTo: shipToNames[so.ship_to_customer_id] || '',
+            };
+          }
+        }
+      });
+      setB2bMap(map);
+    } else {
+      setB2bMap({});
+    }
+
     setLoading(false);
   };
 
@@ -439,7 +476,23 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
                     return (
                       <tr key={d.id} className={`border-b border-neutral-50 hover:bg-neutral-50 transition-colors ${isCancelled ? 'opacity-50 bg-neutral-50' : isDelivered ? 'opacity-70' : ''}`}>
                         <td className="table-cell font-medium text-primary-700 font-mono text-xs">{d.dispatch_number}</td>
-                        <td className="table-cell font-medium text-neutral-800">{d.customer_name || '—'}</td>
+                        <td className="table-cell">
+                          {b2bMap[d.id] ? (
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-1">
+                                <span className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest w-12 shrink-0">Bill To</span>
+                                <span className="text-xs font-medium text-neutral-800">{b2bMap[d.id].billTo}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-[9px] font-bold text-blue-400 uppercase tracking-widest w-12 shrink-0">Ship To</span>
+                                <span className="text-xs font-medium text-blue-700">{b2bMap[d.id].shipTo || '—'}</span>
+                              </div>
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-600 uppercase tracking-wider">B2B</span>
+                            </div>
+                          ) : (
+                            <span className="font-medium text-neutral-800">{d.customer_name || '—'}</span>
+                          )}
+                        </td>
                         <td className="table-cell text-xs text-neutral-500">
                           {d.godown_id ? (godowns.find(g => g.id === d.godown_id)?.name || '—') : '—'}
                         </td>
