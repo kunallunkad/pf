@@ -30,6 +30,13 @@ export interface CreateSalesOrderPayload {
   company_id?: string | null;
   is_b2b?: boolean;
   ship_to_customer_id?: string | null;
+  ship_to_name?: string | null;
+  ship_to_address1?: string | null;
+  ship_to_address2?: string | null;
+  ship_to_city?: string | null;
+  ship_to_state?: string | null;
+  ship_to_pin?: string | null;
+  ship_to_phone?: string | null;
   items: SalesOrderItemInput[];
 }
 

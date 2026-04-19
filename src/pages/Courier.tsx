@@ -21,7 +21,7 @@ const STATUS_TABS = [
   { key: 'returned', label: 'Returned' },
 ];
 
-const STATUS_COLORS: Record<string, string> = {
+const STATUS_COLORS: Record<string, any> = {
   booked: 'bg-warning-50 text-warning-700',
   in_transit: 'bg-blue-50 text-blue-700',
   delivered: 'bg-success-50 text-success-700',
@@ -188,6 +188,14 @@ export default function Courier({ prefillFromDC }: CourierProps) {
       customer_state: addr.state,
       customer_pincode: addr.pincode,
       customer_phone: addr.phone,
+      is_b2b: e.is_b2b || false,
+      sender_name: e.sender_name || '',
+      sender_phone: e.sender_phone || '',
+      sender_address: e.sender_address || '',
+      sender_address2: '',
+      sender_city: e.sender_city || '',
+      sender_state: e.sender_state || '',
+      sender_pincode: e.sender_pincode || '',
     });
     setShowModal(true);
   };

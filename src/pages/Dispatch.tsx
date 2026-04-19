@@ -72,8 +72,8 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
   const [invOptions, setInvOptions] = useState<InvOption[]>([]);
   const [godowns, setGodowns] = useState<Godown[]>([]);
   const [cancelTarget, setCancelTarget] = useState<DispatchEntry | null>(null);
-  const [soMap, setSoMap] = useState<Record<string, string>>({});
-  const [invMap, setInvMap] = useState<Record<string, string>>({});
+  const [soMap, setSoMap] = useState<Record<string, any>>({});
+  const [invMap, setInvMap] = useState<Record<string, any>>({});
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -131,7 +131,7 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
         .in('id', soIds);
 
       const shipToIds = [...new Set((soRows || []).map((s: { ship_to_customer_id?: string | null }) => s.ship_to_customer_id).filter(Boolean))] as string[];
-      let shipToNames: Record<string, string> = {};
+      let shipToNames: Record<string, any> = {};
       if (shipToIds.length > 0) {
         const { data: custRows } = await supabase
           .from('customers')
@@ -176,10 +176,10 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
     ]);
     setSoOptions(soRes.data || []);
     setInvOptions(invDropdownRes.data || []);
-    const sm: Record<string, string> = {};
+    const sm: Record<string, any> = {};
     (soRes.data || []).forEach((s: { id: string; so_number: string }) => { sm[s.id] = s.so_number; });
     setSoMap(sm);
-    const im: Record<string, string> = {};
+    const im: Record<string, any> = {};
     (invAllRes.data || []).forEach((i: { id: string; invoice_number: string; status: string }) => {
       if (i.status !== 'cancelled') im[i.id] = i.invoice_number;
     });
@@ -349,7 +349,7 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
   };
 
   const getStatusColor = (status: string) => {
-    const m: Record<string, string> = {
+    const m: Record<string, any> = {
       pending: 'bg-warning-50 text-warning-700',
       dispatched: 'bg-blue-50 text-blue-700',
       in_transit: 'bg-primary-50 text-primary-700',
@@ -471,7 +471,7 @@ export default function Dispatch({ prefillFromDC, onNavigate: _onNavigate }: Dis
                 <tbody>
                   {filtered.map(d => {
                     const isDelivered = d.status === 'delivered';
-                    const isCancelled = d.status === 'cancelled';
+                    const isCancelled = (d.status as string) === 'cancelled';
                     const isLocked = isDelivered || isCancelled;
                     return (
                       <tr key={d.id} className={`border-b border-neutral-50 hover:bg-neutral-50 transition-colors ${isCancelled ? 'opacity-50 bg-neutral-50' : isDelivered ? 'opacity-70' : ''}`}>

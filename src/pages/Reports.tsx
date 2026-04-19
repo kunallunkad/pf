@@ -147,8 +147,8 @@ export default function Reports() {
     })).sort((a, b) => b.value - a.value);
     setStockVal(sv);
 
-    const godownValMap: Record<string, { value: number; items: number; name: string }> = {};
-    godownList.forEach(g => { godownValMap[g.id] = { value: 0, items: 0, name: g.name }; });
+    const godownValMap: Record<string, { value: number; items: number; godown: string }> = {};
+    godownList.forEach(g => { godownValMap[g.id] = { value: 0, items: 0, godown: g.name }; });
     rows.forEach(r => {
       const prod = prods.find(p => p.id === r.product_id);
       if (prod && godownValMap[r.godown_id]) {

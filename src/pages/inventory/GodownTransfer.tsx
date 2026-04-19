@@ -558,6 +558,7 @@ create policy "Allow all for authenticated" on godown_transfer_items for all to 
         isOpen={!!confirmCancel}
         title="Cancel Transfer"
         message="This action cannot be undone."
+        onClose={() => setConfirmCancel(null)}
         onConfirm={() => setConfirmCancel(null)}
         onCancel={() => setConfirmCancel(null)}
       />

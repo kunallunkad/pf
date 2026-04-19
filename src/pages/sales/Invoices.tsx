@@ -187,9 +187,9 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
     loadAndPrefill();
   }, [prefillFromDC, godowns]);
 
-  const [soMap, setSoMap] = useState<Record<string, string>>({});
+  const [soMap, setSoMap] = useState<Record<string, any>>({});
   const [soIsB2bMap, setSoIsB2bMap] = useState<Record<string, boolean>>({});
-  const [dcMap, setDcMap] = useState<Record<string, string>>({});
+  const [dcMap, setDcMap] = useState<Record<string, any>>({});
   const [dcIsB2bMap, setDcIsB2bMap] = useState<Record<string, boolean>>({});
 
   const loadData = async () => {
@@ -214,7 +214,7 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
     if (godownsData.length > 0) {
       setForm(f => ({ ...f, godown_id: f.godown_id || godownsData[0].id }));
     }
-    const sm: Record<string, string> = {};
+    const sm: Record<string, any> = {};
     const soB2b: Record<string, boolean> = {};
     (soRes.data || []).forEach((s: { id: string; so_number: string; is_b2b?: boolean }) => {
       sm[s.id] = s.so_number;
@@ -222,7 +222,7 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
     });
     setSoMap(sm);
     setSoIsB2bMap(soB2b);
-    const dm: Record<string, string> = {};
+    const dm: Record<string, any> = {};
     const b2b: Record<string, boolean> = {};
     (dcRes.data || []).forEach((d: { id: string; challan_number: string; is_b2b?: boolean }) => {
       dm[d.id] = d.challan_number;
@@ -884,8 +884,8 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
                             {soIsB2bMap[inv.sales_order_id] && <span className="text-[9px] font-bold uppercase">(b2b)</span>}
                           </span>
                         )}
-                        {(inv as Record<string, unknown>).delivery_challan_id && dcMap[(inv as Record<string, unknown>).delivery_challan_id as string] && (() => {
-                          const dcId = (inv as Record<string, unknown>).delivery_challan_id as string;
+                        {(inv as Record<string, any>).delivery_challan_id && dcMap[(inv as Record<string, any>).delivery_challan_id as string] && (() => {
+                          const dcId = (inv as Record<string, any>).delivery_challan_id as string;
                           const dcNum = dcMap[dcId];
                           const isLegacy = dcNum.startsWith('LEGACY-DC-');
                           const isB2B = dcIsB2bMap[dcId];
@@ -896,7 +896,7 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
                             </span>
                           );
                         })()}
-                        {!inv.sales_order_id && !(inv as Record<string, unknown>).delivery_challan_id && (
+                        {!inv.sales_order_id && !(inv as Record<string, any>).delivery_challan_id && (
                           <span className="text-neutral-300 text-xs">—</span>
                         )}
                       </div>
@@ -1065,8 +1065,8 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
                   {soIsB2bMap[selectedInvoice.sales_order_id] && <span className="text-[9px] font-bold uppercase">(b2b)</span>}
                 </span>
               )}
-              {(selectedInvoice as Record<string, unknown>).delivery_challan_id && dcMap[(selectedInvoice as Record<string, unknown>).delivery_challan_id as string] && (() => {
-                const dcId = (selectedInvoice as Record<string, unknown>).delivery_challan_id as string;
+              {(selectedInvoice as Record<string, any>).delivery_challan_id && dcMap[(selectedInvoice as Record<string, any>).delivery_challan_id as string] && (() => {
+                const dcId = (selectedInvoice as Record<string, any>).delivery_challan_id as string;
                 const dcNum = dcMap[dcId];
                 const isDcB2b = dcIsB2bMap[dcId];
                 return dcNum.startsWith('LEGACY-DC-') ? null : (
