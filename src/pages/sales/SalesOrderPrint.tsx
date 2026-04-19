@@ -39,11 +39,11 @@ export default function SalesOrderPrint({ order, items, companyOverride, printMo
   const b2bItems = isB2B
     ? items.map(i => ({
         ...i,
-        unit_price: (i as Record<string, unknown>).b2b_price != null
-          ? (i as Record<string, unknown>).b2b_price as number
+        unit_price: (i as Record<string, any>).b2b_price != null
+          ? (i as Record<string, any>).b2b_price as number
           : i.unit_price,
-        total_price: i.quantity * ((i as Record<string, unknown>).b2b_price != null
-          ? (i as Record<string, unknown>).b2b_price as number
+        total_price: i.quantity * ((i as Record<string, any>).b2b_price != null
+          ? (i as Record<string, any>).b2b_price as number
           : i.unit_price),
       }))
     : items;

@@ -21,6 +21,7 @@ export interface CompanySettings {
   ifsc_code: string;
   account_holder: string;
   upi_id: string;
+  logo_url?: string;
   footer_note: string;
   updated_at: string;
 }

@@ -32,7 +32,7 @@ export default function Inventory() {
   const [openRowMenu, setOpenRowMenu] = useState<string | null>(null);
   const [godowns, setGodowns] = useState<Godown[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [openingStocks, setOpeningStocks] = useState<Record<string, string>>({});
+  const [openingStocks, setOpeningStocks] = useState<Record<string, any>>({});
 
   const [viewProduct, setViewProduct] = useState<Product | null>(null);
   const [showLedgerModal, setShowLedgerModal] = useState(false);
@@ -96,7 +96,7 @@ export default function Inventory() {
     setEditing(null);
     setPendingImageFile(null);
     setImagePreview('');
-    const stocks: Record<string, string> = {};
+    const stocks: Record<string, any> = {};
     (godowns).forEach(g => { stocks[g.id] = '0'; });
     setOpeningStocks(stocks);
     const defaultCompany = companies.find(c => c.sort_order === 2) || companies[0];
@@ -112,7 +112,7 @@ export default function Inventory() {
     setShowModal(true);
   };
 
-  const [editGodownStocks, setEditGodownStocks] = useState<Record<string, string>>({});
+  const [editGodownStocks, setEditGodownStocks] = useState<Record<string, any>>({});
 
   const openEdit = async (p: Product) => {
     setEditing(p);
@@ -120,7 +120,7 @@ export default function Inventory() {
     setImagePreview(p.image_url || '');
     setOpeningStocks({});
     const { data: stocks } = await supabase.from('godown_stock').select('godown_id, quantity').eq('product_id', p.id);
-    const stocksMap: Record<string, string> = {};
+    const stocksMap: Record<string, any> = {};
     (stocks || []).forEach(s => { stocksMap[s.godown_id] = String(s.quantity); });
     godowns.forEach(g => { if (!stocksMap[g.id]) stocksMap[g.id] = '0'; });
     setEditGodownStocks(stocksMap);
@@ -287,7 +287,7 @@ export default function Inventory() {
     }
 
     if (selectedProduct.is_gemstone && selectedProduct.total_weight) {
-      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const updates: Record<string, any> = { updated_at: new Date().toISOString() };
       if (isIn) {
         updates.remaining_weight = (selectedProduct.remaining_weight || 0) + qty;
         updates.total_weight = (selectedProduct.total_weight || 0) + (mvType === 'purchase' ? qty : 0);
@@ -320,7 +320,7 @@ export default function Inventory() {
   };
 
   const getCategoryColor = (cat: string) => {
-    const map: Record<string, string> = {
+    const map: Record<string, any> = {
       'Astro Products': 'bg-primary-100 text-primary-700',
       'Vastu Items': 'bg-blue-100 text-blue-700',
       'Healing Items': 'bg-green-100 text-green-700',
@@ -739,7 +739,7 @@ export default function Inventory() {
                 <tbody className="divide-y divide-neutral-50">
                   {stockMovements.map(mv => {
                     const isIn = ['in', 'purchase', 'return'].includes(mv.movement_type);
-                    const typeColors: Record<string, string> = {
+                    const typeColors: Record<string, any> = {
                       purchase: 'bg-success-50 text-success-700',
                       sale: 'bg-error-50 text-error-700',
                       return: 'bg-blue-50 text-blue-700',

@@ -26,6 +26,7 @@ interface LineItem {
   quantity: string;
   unit_price: string;
   b2b_price: string;
+  discount_pct?: string;
   total_price: number;
   godown_id: string;
 }
@@ -513,7 +514,7 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
             unit: i.unit,
             quantity: String(i.quantity),
             unit_price: String(i.unit_price),
-            b2b_price: (i as Record<string, unknown>).b2b_price != null ? String((i as Record<string, unknown>).b2b_price) : String(i.unit_price),
+            b2b_price: (i as Record<string, any>).b2b_price != null ? String((i as Record<string, any>).b2b_price) : String(i.unit_price),
             total_price: i.total_price,
             godown_id: (i as Record<string,string>).godown_id || '',
           }))
@@ -657,7 +658,7 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
   const uniqueSOCustomers = [...new Set(orders.map(o => o.customer_name))].sort();
   const hasSOFilters = filterCustomer || filterStatus || filterFrom || filterTo;
 
-  const statusColors: Record<string, string> = {
+  const statusColors: Record<string, any> = {
     draft: 'text-neutral-500',
     confirmed: 'text-blue-600',
     invoiced: 'text-primary-600',
@@ -995,7 +996,7 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <p className="text-xs font-semibold text-neutral-600 uppercase tracking-wide">Items</p>
-              <button onClick={addItem} className="btn-ghost text-xs"><Plus className="w-3.5 h-3.5" /> Add Item</button>
+              <button onClick={() => addItem()} className="btn-ghost text-xs"><Plus className="w-3.5 h-3.5" /> Add Item</button>
             </div>
             <div className="border border-neutral-200 rounded-lg overflow-visible">
               <table className="w-full">
@@ -1014,7 +1015,6 @@ export default function SalesOrders({ onNavigate }: SalesOrdersProps) {
                   {items.map((item, i) => {
                     const stock = getStockForItem(item);
                     const qty = parseFloat(item.quantity) || 0;
-                    const overStock = stock !== null && qty > stock;
                     return (
                       <tr key={i} className="border-t border-neutral-100">
                         <td className="px-3 py-2">

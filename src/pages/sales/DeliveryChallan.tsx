@@ -601,7 +601,7 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
               <div>
                 <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider">Linked Sales Order</p>
                 <p className="text-sm text-blue-800 font-medium">
-                  {soNumberMap[form.sales_order_id] || [...editingSOs].find(s => s.id === form.sales_order_id)?.so_number || form.sales_order_id}
+                  {String(soNumberMap[form.sales_order_id] || [...editingSOs].find(s => s.id === form.sales_order_id)?.so_number || form.sales_order_id)}
                   {' — '}{form.customer_name}
                 </p>
               </div>
