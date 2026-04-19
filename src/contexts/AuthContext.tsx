@@ -71,21 +71,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     initializeAuth();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!initialized) return;
-      setIsAuthLoading(true);
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        try {
-          await fetchProfile(session.user.id);
-        } catch {
-          setProfile(null);
-        }
-      } else {
-        setProfile(null);
+
+      if (event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+        setSession(session);
+        setUser(session?.user ?? null);
+        return;
       }
-      setIsAuthLoading(false);
+
+      if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setUser(null);
+        setProfile(null);
+        return;
+      }
+
+      if (event === 'SIGNED_IN') {
+        setIsAuthLoading(true);
+        setSession(session);
+        setUser(session?.user ?? null);
+        if (session?.user) {
+          try {
+            await fetchProfile(session.user.id);
+          } catch {
+            setProfile(null);
+          }
+        }
+        setIsAuthLoading(false);
+      }
     });
 
     return () => subscription.unsubscribe();
