@@ -63,6 +63,7 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
   const [viewChallan, setViewChallan] = useState<DCType | null>(null);
   const [viewItems, setViewItems] = useState<ChallanItem[]>([]);
   const [showViewModal, setShowViewModal] = useState(false);
+  const [viewB2BSO, setViewB2BSO] = useState<{ is_b2b: boolean; ship_to_name?: string; ship_to_phone?: string; ship_to_address1?: string; ship_to_address2?: string; ship_to_city?: string; ship_to_state?: string; ship_to_pin?: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DCType | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [loadingSO, setLoadingSO] = useState(false);
@@ -79,7 +80,7 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
       supabase.from('delivery_challans').select('*').order('created_at', { ascending: false }),
       supabase.from('products').select('id, name, unit, selling_price, company_id').eq('is_active', true),
       supabase.from('customers').select('id, name, phone, address, address2, city, state, pincode').eq('is_active', true).order('name'),
-      supabase.from('sales_orders').select('id, so_number, customer_id, customer_name, status').in('status', ['confirmed', 'dispatched', 'delivered']).order('created_at', { ascending: false }),
+      supabase.from('sales_orders').select('id, so_number, customer_id, customer_name, status').order('created_at', { ascending: false }).limit(500),
       supabase.from('godowns').select('id, name').eq('is_active', true).order('name'),
     ]);
     const allChallans = challansRes.data || [];
@@ -87,9 +88,12 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
     setProducts(productsRes.data || []);
     setCustomers(customersRes.data || []);
     setGodowns(godownsRes.data || []);
-    const linkedSOIds = new Set(allChallans.filter(c => c.sales_order_id && c.status !== 'cancelled').map(c => c.sales_order_id));
     const allSOs = (soRes.data || []) as SalesOrder[];
-    setSalesOrders(allSOs.filter(so => !linkedSOIds.has(so.id)));
+    const soMap: Record<string, string> = {};
+    allSOs.forEach(so => { soMap[so.id] = so.so_number; });
+    setSoNumberMap(soMap);
+    const linkedSOIds = new Set(allChallans.filter(c => c.sales_order_id && c.status !== 'cancelled').map(c => c.sales_order_id));
+    setSalesOrders(allSOs.filter(so => ['confirmed', 'dispatched', 'delivered'].includes(so.status) && !linkedSOIds.has(so.id)));
   };
 
   const handleCustomerChange = (id: string) => {
@@ -255,6 +259,7 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
     loadData();
   };
 
+  const [soNumberMap, setSoNumberMap] = useState<Record<string, string>>({});
   const [showSOSelectModal, setShowSOSelectModal] = useState(false);
   const [soSelectSearch, setSoSelectSearch] = useState('');
   const [editingSOs, setEditingSOs] = useState<SalesOrder[]>([]);
@@ -320,8 +325,32 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
 
   const openView = async (dc: DCType) => {
     const { data: itemsData } = await supabase.from('delivery_challan_items').select('*').eq('delivery_challan_id', dc.id);
-    setViewChallan(dc);
+    setViewChallan({ ...dc, items: (itemsData || []) as ChallanItem[] });
     setViewItems((itemsData || []) as ChallanItem[]);
+    setViewB2BSO(null);
+    if (dc.sales_order_id) {
+      const { data: soData } = await supabase
+        .from('sales_orders')
+        .select('is_b2b, ship_to_name, ship_to_phone, ship_to_address1, ship_to_address2, ship_to_city, ship_to_state, ship_to_pin')
+        .eq('id', dc.sales_order_id)
+        .maybeSingle();
+      if (soData?.is_b2b) setViewB2BSO(soData);
+    }
+    const dcWithCompany = dc as DCType & { company_id?: string };
+    let coId = dcWithCompany.company_id || null;
+    if (!coId && itemsData && itemsData.length > 0) {
+      const firstProdId = itemsData.find(i => i.product_id)?.product_id;
+      if (firstProdId) {
+        const { data: prod } = await supabase.from('products').select('company_id').eq('id', firstProdId).maybeSingle();
+        coId = prod?.company_id || null;
+      }
+    }
+    if (coId) {
+      const companies = await fetchCompanies();
+      setPrintCompany(companies.find(c => c.id === coId) || undefined);
+    } else {
+      setPrintCompany(undefined);
+    }
     setShowViewModal(true);
   };
 
@@ -445,7 +474,13 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
             <tbody>
               {filtered.map(dc => (
                 <tr key={dc.id} className="border-b border-neutral-50 hover:bg-neutral-50 transition-colors">
-                  <td className="table-cell font-medium text-primary-700 text-xs">{dc.challan_number}</td>
+                  <td className="table-cell font-medium text-xs">
+                    {dc.challan_number.startsWith('LEGACY-DC-') ? (
+                      <span className="text-neutral-400 italic text-[11px]">Legacy (pre-system)</span>
+                    ) : (
+                      <span className="text-primary-700">{dc.challan_number}</span>
+                    )}
+                  </td>
                   <td className="table-cell">
                     <p className="font-medium text-sm">{dc.customer_name}</p>
                     {dc.customer_phone && <p className="text-xs text-neutral-400">{dc.customer_phone}</p>}
@@ -453,7 +488,7 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
                   <td className="table-cell">
                     {dc.sales_order_id ? (
                       <span className="text-xs font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
-                        {salesOrders.find(s => s.id === dc.sales_order_id)?.so_number || 'SO Linked'}
+                        {soNumberMap[dc.sales_order_id] || 'SO Linked'}
                       </span>
                     ) : <span className="text-neutral-300 text-xs">—</span>}
                   </td>
@@ -467,7 +502,7 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
                   <td className="table-cell"><StatusBadge status={dc.status} /></td>
                   <td className="table-cell text-right">
                     <div className="flex items-center justify-end gap-1">
-                      {dc.status !== 'cancelled' && (
+                      {dc.status === 'created' && (
                         <button onClick={() => onNavigate('invoices', { prefillDCForInvoice: dc })} title="Next step: Create Invoice"
                           className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-primary-600 text-white hover:bg-primary-700 transition-colors shadow-sm">
                           <Receipt className="w-3 h-3" /> Invoice
@@ -512,7 +547,7 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
               <div>
                 <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider">Linked Sales Order</p>
                 <p className="text-sm text-blue-800 font-medium">
-                  {[...editingSOs, ...salesOrders].find(s => s.id === form.sales_order_id)?.so_number || form.sales_order_id}
+                  {soNumberMap[form.sales_order_id] || [...editingSOs].find(s => s.id === form.sales_order_id)?.so_number || form.sales_order_id}
                   {' — '}{form.customer_name}
                 </p>
               </div>
@@ -643,70 +678,44 @@ export default function DeliveryChallan({ onNavigate }: DeliveryChallanProps) {
         </div>
       </Modal>
 
-      <Modal isOpen={showViewModal} onClose={() => { setShowViewModal(false); setViewChallan(null); }}
-        title={viewChallan ? `Delivery Challan — ${viewChallan.challan_number}` : ''} size="lg"
-        footer={<button onClick={() => { setShowViewModal(false); setViewChallan(null); }} className="btn-secondary">Close</button>}>
+      <Modal isOpen={showViewModal} onClose={() => { setShowViewModal(false); setViewChallan(null); setViewB2BSO(null); }}
+        title={viewChallan ? `Delivery Challan — ${viewChallan.challan_number}` : ''} size="xl"
+        footer={
+          <div className="flex items-center gap-2 w-full">
+            <div className="flex items-center gap-2">
+              <StatusBadge status={viewChallan?.status || ''} />
+              {viewChallan?.sales_order_id && (
+                <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-medium">
+                  SO: {soNumberMap[viewChallan.sales_order_id] || '—'}
+                </span>
+              )}
+              {viewB2BSO && (
+                <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">B2B</span>
+              )}
+            </div>
+            <div className="ml-auto flex gap-2">
+              <button onClick={() => { if (viewChallan) { setShowViewModal(false); openPrint(viewChallan); } }} className="flex items-center gap-1.5 btn-secondary text-xs">
+                <Printer className="w-3.5 h-3.5" /> Print Challan
+              </button>
+              <button onClick={() => { setShowViewModal(false); setViewChallan(null); setViewB2BSO(null); }} className="btn-primary">Close</button>
+            </div>
+          </div>
+        }>
         {viewChallan && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-              <div>
-                <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Customer</p>
-                <p className="font-medium text-neutral-900">{viewChallan.customer_name}</p>
-                {viewChallan.customer_phone && <p className="text-xs text-neutral-500">{viewChallan.customer_phone}</p>}
+          <div>
+            {viewB2BSO && (
+              <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg">
+                <p className="text-[10px] font-bold text-blue-600 uppercase tracking-wider mb-1">B2B Ship-To</p>
+                <p className="text-sm font-semibold text-neutral-900">{viewB2BSO.ship_to_name}</p>
+                {viewB2BSO.ship_to_phone && <p className="text-xs text-neutral-600">{viewB2BSO.ship_to_phone}</p>}
+                {(viewB2BSO.ship_to_address1 || viewB2BSO.ship_to_city) && (
+                  <p className="text-xs text-neutral-500">
+                    {[viewB2BSO.ship_to_address1, viewB2BSO.ship_to_address2, viewB2BSO.ship_to_city, viewB2BSO.ship_to_state, viewB2BSO.ship_to_pin].filter(Boolean).join(', ')}
+                  </p>
+                )}
               </div>
-              <div>
-                <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Status</p>
-                <StatusBadge status={viewChallan.status} />
-              </div>
-              {viewChallan.sales_order_id && (
-                <div>
-                  <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Linked SO</p>
-                  <p className="text-xs font-medium text-blue-700">{salesOrders.find(s => s.id === viewChallan.sales_order_id)?.so_number || '—'}</p>
-                </div>
-              )}
-              <div>
-                <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Challan Date</p>
-                <p className="text-neutral-700">{formatDate(viewChallan.challan_date)}</p>
-              </div>
-              {viewChallan.courier_company && (
-                <div>
-                  <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Courier</p>
-                  <p className="text-neutral-700">{viewChallan.courier_company}</p>
-                </div>
-              )}
-              {viewChallan.tracking_number && (
-                <div>
-                  <p className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">Tracking</p>
-                  <span className="text-xs font-mono bg-neutral-100 px-2 py-0.5 rounded">{viewChallan.tracking_number}</span>
-                </div>
-              )}
-            </div>
-
-            <div>
-              <p className="text-xs font-semibold text-neutral-700 mb-2">Items</p>
-              <div className="border border-neutral-200 rounded-lg overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead className="bg-neutral-50">
-                    <tr>
-                      <th className="table-header text-left">Product</th>
-                      <th className="table-header text-right w-20">Qty</th>
-                      <th className="table-header text-right w-24">Rate</th>
-                      <th className="table-header text-right w-24">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {viewItems.map((item, idx) => (
-                      <tr key={idx} className="border-t border-neutral-100">
-                        <td className="table-cell font-medium">{item.product_name}</td>
-                        <td className="table-cell text-right">{item.quantity} {item.unit}</td>
-                        <td className="table-cell text-right">{formatCurrency(item.unit_price)}</td>
-                        <td className="table-cell text-right font-semibold">{formatCurrency(item.total_price)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            )}
+            <ChallanPrint challan={viewChallan} companyOverride={printCompany} />
           </div>
         )}
       </Modal>

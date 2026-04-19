@@ -268,7 +268,7 @@ export interface Invoice {
   customer_pincode?: string;
   invoice_date: string;
   due_date?: string;
-  status: 'draft' | 'sent' | 'partial' | 'paid' | 'overdue' | 'cancelled';
+  status: 'draft' | 'issued' | 'sent' | 'partial' | 'paid' | 'overdue' | 'cancelled';
   subtotal: number;
   tax_amount: number;
   courier_charges: number;
@@ -316,7 +316,7 @@ export interface DeliveryChallan {
   dispatch_mode?: string;
   courier_company?: string;
   tracking_number?: string;
-  status: 'draft' | 'dispatched' | 'delivered' | 'cancelled';
+  status: 'draft' | 'created' | 'dispatched' | 'invoiced' | 'delivered' | 'cancelled';
   notes?: string;
   items?: DeliveryChallanItem[];
   created_at: string;

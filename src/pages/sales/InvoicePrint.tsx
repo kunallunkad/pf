@@ -195,30 +195,34 @@ export default function InvoicePrint({ invoice, companyOverride, printMode = 'no
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-5">
-        <div className="border border-neutral-200 rounded-lg p-3">
-          <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2">Bank Details</p>
-          <div className="space-y-1">
-            <div className="flex justify-between text-xs"><span className="text-neutral-500">Bank</span><span className="font-medium">{invoice.bank_name || co.bank_name}</span></div>
-            {(invoice.account_number || co.account_number) && <div className="flex justify-between text-xs"><span className="text-neutral-500">Account No.</span><span className="font-medium">{invoice.account_number || co.account_number}</span></div>}
-            {(invoice.ifsc_code || co.ifsc_code) && <div className="flex justify-between text-xs"><span className="text-neutral-500">IFSC Code</span><span className="font-medium">{invoice.ifsc_code || co.ifsc_code}</span></div>}
-            {co.upi_id && <div className="flex justify-between text-xs"><span className="text-neutral-500">UPI</span><span className="font-medium">{co.upi_id}</span></div>}
-            <div className="flex justify-between text-xs"><span className="text-neutral-500">Payment Terms</span><span className="font-medium">{invoice.payment_terms || 'Due on receipt'}</span></div>
+      <div className={`grid gap-5 ${isB2B ? 'grid-cols-1' : 'grid-cols-2'}`}>
+        {!isB2B && (
+          <div className="border border-neutral-200 rounded-lg p-3">
+            <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2">Bank Details</p>
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs"><span className="text-neutral-500">Bank</span><span className="font-medium">{invoice.bank_name || co.bank_name}</span></div>
+              {(invoice.account_number || co.account_number) && <div className="flex justify-between text-xs"><span className="text-neutral-500">Account No.</span><span className="font-medium">{invoice.account_number || co.account_number}</span></div>}
+              {(invoice.ifsc_code || co.ifsc_code) && <div className="flex justify-between text-xs"><span className="text-neutral-500">IFSC Code</span><span className="font-medium">{invoice.ifsc_code || co.ifsc_code}</span></div>}
+              {co.upi_id && <div className="flex justify-between text-xs"><span className="text-neutral-500">UPI</span><span className="font-medium">{co.upi_id}</span></div>}
+              <div className="flex justify-between text-xs"><span className="text-neutral-500">Payment Terms</span><span className="font-medium">{invoice.payment_terms || 'Due on receipt'}</span></div>
+            </div>
           </div>
-        </div>
+        )}
         <div className="border border-neutral-200 rounded-lg p-3 flex flex-col justify-between">
           <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Authorized Signature</p>
           <div className="mt-6 pt-3 border-t border-neutral-300">
-            <p className="text-xs font-semibold text-neutral-700">{co.name}</p>
-            {co.tagline && <p className="text-[10px] text-neutral-400">{co.tagline}</p>}
+            <p className="text-xs font-semibold text-neutral-700">{isB2B ? sellerName : co.name}</p>
+            {!isB2B && co.tagline && <p className="text-[10px] text-neutral-400">{co.tagline}</p>}
           </div>
         </div>
       </div>
 
       {invoice.notes && <div className="mt-4 text-xs text-neutral-500 border-t border-neutral-100 pt-3"><span className="font-medium text-neutral-700">Notes: </span>{invoice.notes}</div>}
-      <div className="mt-4 text-center text-[10px] text-neutral-400 border-t border-neutral-100 pt-3">
-        {isB2B ? `Processed by ${co.name}` : co.footer_note}
-      </div>
+      {!isB2B && (
+        <div className="mt-4 text-center text-[10px] text-neutral-400 border-t border-neutral-100 pt-3">
+          {co.footer_note}
+        </div>
+      )}
     </div>
   );
 }

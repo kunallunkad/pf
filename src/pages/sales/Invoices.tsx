@@ -191,7 +191,7 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
   const [dcMap, setDcMap] = useState<Record<string, string>>({});
 
   const loadData = async () => {
-    const [invRes, productsRes, customersRes, godownsData] = await Promise.all([
+    const [invRes, productsRes, customersRes, godownsData, soRes, dcRes] = await Promise.all([
       supabase.from('invoices')
         .select('id, invoice_number, invoice_date, due_date, customer_id, customer_name, customer_phone, customer_address, customer_address2, customer_city, customer_state, customer_pincode, subtotal, tax_amount, total_amount, paid_amount, outstanding_amount, courier_charges, discount_amount, status, payment_terms, notes, bank_name, account_number, ifsc_code, sales_order_id, delivery_challan_id, created_at')
         .gte('invoice_date', dateRange.from)
@@ -200,6 +200,8 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
       supabase.from('products').select('id, name, unit, selling_price').eq('is_active', true),
       supabase.from('customers').select('id, name, phone, alt_phone, address, address2, city, state, pincode').eq('is_active', true).order('name'),
       fetchGodowns(),
+      supabase.from('sales_orders').select('id, so_number').order('created_at', { ascending: false }).limit(500),
+      supabase.from('delivery_challans').select('id, challan_number').order('created_at', { ascending: false }).limit(500),
     ]);
     const invoiceList = invRes.data || [];
     setInvoices(invoiceList);
@@ -209,17 +211,6 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
     if (godownsData.length > 0) {
       setForm(f => ({ ...f, godown_id: f.godown_id || godownsData[0].id }));
     }
-
-    const soIds = [...new Set(invoiceList.map((i: any) => i.sales_order_id).filter(Boolean))];
-    const dcIds = [...new Set(invoiceList.map((i: any) => i.delivery_challan_id).filter(Boolean))];
-    const [soRes, dcRes] = await Promise.all([
-      soIds.length > 0
-        ? supabase.from('sales_orders').select('id, so_number').in('id', soIds)
-        : Promise.resolve({ data: [] }),
-      dcIds.length > 0
-        ? supabase.from('delivery_challans').select('id, challan_number').in('id', dcIds)
-        : Promise.resolve({ data: [] }),
-    ]);
     const sm: Record<string, string> = {};
     (soRes.data || []).forEach((s: { id: string; so_number: string }) => { sm[s.id] = s.so_number; });
     setSoMap(sm);
@@ -442,6 +433,7 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
   };
 
   const openView = async (inv: Invoice) => {
+    setPrintCompany(undefined);
     const [itemsRes, dispatchRes, paymentsRes] = await Promise.all([
       supabase.from('invoice_items').select('*').eq('invoice_id', inv.id),
       supabase.from('dispatch_entries').select('dispatch_number, status').eq('invoice_id', inv.id),
@@ -697,7 +689,7 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
     const matchStatus = statusFilter === 'All'
       ? i.status !== 'cancelled'
       : statusFilter === 'Pending'
-        ? i.status === 'sent'
+        ? i.status === 'issued' || i.status === 'sent'
         : i.status === statusFilter.toLowerCase();
     const matchDate = i.invoice_date >= dateRange.from && i.invoice_date <= dateRange.to;
     const matchCustomer = !filterCustomer || i.customer_name === filterCustomer;
@@ -839,9 +831,15 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
                         {inv.sales_order_id && soMap[inv.sales_order_id] && (
                           <span className="text-[10px] font-medium bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded w-fit">SO: {soMap[inv.sales_order_id]}</span>
                         )}
-                        {(inv as Record<string, unknown>).delivery_challan_id && dcMap[(inv as Record<string, unknown>).delivery_challan_id as string] && (
-                          <span className="text-[10px] font-medium bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded w-fit">DC: {dcMap[(inv as Record<string, unknown>).delivery_challan_id as string]}</span>
-                        )}
+                        {(inv as Record<string, unknown>).delivery_challan_id && dcMap[(inv as Record<string, unknown>).delivery_challan_id as string] && (() => {
+                          const dcNum = dcMap[(inv as Record<string, unknown>).delivery_challan_id as string];
+                          const isLegacy = dcNum.startsWith('LEGACY-DC-');
+                          return (
+                            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded w-fit ${isLegacy ? 'bg-neutral-100 text-neutral-500' : 'bg-orange-50 text-orange-700'}`}>
+                              {isLegacy ? 'Legacy' : `DC: ${dcNum}`}
+                            </span>
+                          );
+                        })()}
                         {!inv.sales_order_id && !(inv as Record<string, unknown>).delivery_challan_id && (
                           <span className="text-neutral-300 text-xs">—</span>
                         )}
@@ -985,154 +983,46 @@ export default function Invoices({ onNavigate: _onNavigate, prefillFromDC }: Inv
       <Modal isOpen={showViewModal} onClose={() => setShowViewModal(false)} title="Invoice Details" size="2xl"
         footer={
           <div className="flex gap-2">
-            <button onClick={() => { setShowViewModal(false); if (selectedInvoice) openPrint(selectedInvoice, 'normal'); }} className="btn-secondary">Print</button>
+            {selectedInvoice?.sales_order_id && (
+              <button onClick={() => { setShowViewModal(false); if (selectedInvoice) openPrint(selectedInvoice, 'b2b'); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors">
+                <Printer className="w-3.5 h-3.5" /> Print B2B
+              </button>
+            )}
+            <button onClick={() => { setShowViewModal(false); if (selectedInvoice) openPrint(selectedInvoice, 'normal'); }}
+              className="flex items-center gap-1.5 btn-secondary text-xs">
+              <Printer className="w-3.5 h-3.5" /> Print Invoice
+            </button>
             <button onClick={() => setShowViewModal(false)} className="btn-primary">Close</button>
           </div>
         }>
         {selectedInvoice && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <p className="label">Invoice #</p>
-                <p className="text-sm font-semibold text-primary-700">{selectedInvoice.invoice_number}</p>
-              </div>
-              <div>
-                <p className="label">Status</p>
+          <div>
+            <div className="flex items-center gap-3 mb-3 pb-3 border-b border-neutral-100">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-primary-700">{selectedInvoice.invoice_number}</span>
                 <StatusBadge status={selectedInvoice.status} />
               </div>
-              <div>
-                <p className="label">Customer</p>
-                <p className="text-sm font-medium">{selectedInvoice.customer_name}</p>
-                {selectedInvoice.customer_phone && <p className="text-xs text-neutral-500">{selectedInvoice.customer_phone}</p>}
-              </div>
-              {selectedInvoice.sales_order_id && (
-                <div>
-                  <p className="label">Sales Order</p>
-                  <span className="text-xs font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded">{soMap[selectedInvoice.sales_order_id] || '—'}</span>
-                </div>
+              {selectedInvoice.sales_order_id && soMap[selectedInvoice.sales_order_id] && (
+                <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-medium">SO: {soMap[selectedInvoice.sales_order_id]}</span>
               )}
-              {(selectedInvoice as Record<string, unknown>).delivery_challan_id && (
-                <div>
-                  <p className="label">Delivery Challan</p>
-                  <span className="text-xs font-semibold bg-orange-50 text-orange-700 px-2 py-0.5 rounded">{dcMap[(selectedInvoice as Record<string, unknown>).delivery_challan_id as string] || '—'}</span>
-                </div>
-              )}
-              <div>
-                <p className="label">Invoice Date</p>
-                <p className="text-sm">{formatDate(selectedInvoice.invoice_date)}</p>
-              </div>
-              <div>
-                <p className="label">Due Date</p>
-                <p className="text-sm">{selectedInvoice.due_date ? formatDate(selectedInvoice.due_date) : '-'}</p>
-              </div>
-              <div>
-                <p className="label">Payment Terms</p>
-                <p className="text-sm">{selectedInvoice.payment_terms || '-'}</p>
-              </div>
-              {selectedInvoice.customer_address && (
-                <div className="col-span-2">
-                  <p className="label">Address</p>
-                  <p className="text-sm">{selectedInvoice.customer_address}{selectedInvoice.customer_city ? `, ${selectedInvoice.customer_city}` : ''}</p>
-                </div>
+              {(selectedInvoice as Record<string, unknown>).delivery_challan_id && dcMap[(selectedInvoice as Record<string, unknown>).delivery_challan_id as string] && (() => {
+                const dcNum = dcMap[(selectedInvoice as Record<string, unknown>).delivery_challan_id as string];
+                return dcNum.startsWith('LEGACY-DC-') ? null : (
+                  <span className="text-[10px] bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded font-medium">DC: {dcNum}</span>
+                );
+              })()}
+              {viewRelated.payments.length > 0 && (
+                <span className="ml-auto text-[10px] text-success-600 font-medium">
+                  {viewRelated.payments.length} payment{viewRelated.payments.length > 1 ? 's' : ''} recorded
+                </span>
               )}
             </div>
-
-            <div>
-              <p className="text-sm font-semibold text-neutral-700 mb-2">Line Items</p>
-              <div className="border border-neutral-200 rounded-lg overflow-hidden">
-                <table className="w-full">
-                  <thead className="bg-neutral-50">
-                    <tr>
-                      <th className="table-header text-left">Product / Description</th>
-                      <th className="table-header text-right w-16">Qty</th>
-                      <th className="table-header text-right w-24">Rate</th>
-                      <th className="table-header text-right w-16">Disc%</th>
-                      <th className="table-header text-right w-16">Tax%</th>
-                      <th className="table-header text-right w-24">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {viewItems.map((item, i) => (
-                      <tr key={i} className="border-t border-neutral-100">
-                        <td className="px-3 py-2">
-                          <p className="text-sm font-medium">{item.product_name}</p>
-                          {item.description && <p className="text-xs text-neutral-500">{item.description}</p>}
-                        </td>
-                        <td className="px-2 py-2 text-right text-sm">{item.quantity} {item.unit}</td>
-                        <td className="px-2 py-2 text-right text-sm">{formatCurrency(parseFloat(item.unit_price) || 0)}</td>
-                        <td className="px-2 py-2 text-right text-sm">{item.discount_pct}%</td>
-                        <td className="px-2 py-2 text-right text-sm">{item.tax_pct}%</td>
-                        <td className="px-2 py-2 text-right text-sm font-semibold">{formatCurrency(item.total_price)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="flex justify-end mt-2 gap-4 text-sm pr-2">
-                <div className="space-y-1 text-right">
-                  <div className="flex gap-8 justify-between text-neutral-600"><span>Subtotal</span><span className="font-medium">{formatCurrency(selectedInvoice.subtotal)}</span></div>
-                  <div className="flex gap-8 justify-between text-neutral-600"><span>Tax</span><span className="font-medium">{formatCurrency(selectedInvoice.tax_amount)}</span></div>
-                  {(selectedInvoice.courier_charges || 0) > 0 && <div className="flex gap-8 justify-between text-neutral-600"><span>Courier</span><span className="font-medium">{formatCurrency(selectedInvoice.courier_charges)}</span></div>}
-                  {(selectedInvoice.discount_amount || 0) > 0 && <div className="flex gap-8 justify-between text-neutral-600"><span>Discount</span><span className="font-medium text-success-600">-{formatCurrency(selectedInvoice.discount_amount)}</span></div>}
-                  <div className="flex gap-8 justify-between font-bold text-neutral-900 border-t border-neutral-200 pt-1"><span>Total</span><span>{formatCurrency(selectedInvoice.total_amount)}</span></div>
-                  <div className="flex gap-8 justify-between text-success-600"><span>Paid</span><span className="font-medium">{formatCurrency(selectedInvoice.paid_amount)}</span></div>
-                  <div className="flex gap-8 justify-between text-error-600 font-bold"><span>Outstanding</span><span>{formatCurrency(selectedInvoice.outstanding_amount)}</span></div>
-                </div>
-              </div>
-            </div>
-
-            {(selectedInvoice.bank_name || selectedInvoice.account_number) && (
-              <div className="p-3 bg-neutral-50 rounded-lg grid grid-cols-3 gap-3">
-                <p className="col-span-3 text-xs font-semibold text-neutral-600">Bank Details</p>
-                {selectedInvoice.bank_name && <div><p className="label">Bank</p><p className="text-sm">{selectedInvoice.bank_name}</p></div>}
-                {selectedInvoice.account_number && <div><p className="label">Account #</p><p className="text-sm">{selectedInvoice.account_number}</p></div>}
-                {selectedInvoice.ifsc_code && <div><p className="label">IFSC</p><p className="text-sm">{selectedInvoice.ifsc_code}</p></div>}
-              </div>
-            )}
-
-            {selectedInvoice.notes && (
-              <div>
-                <p className="label">Notes</p>
-                <p className="text-sm text-neutral-600">{selectedInvoice.notes}</p>
-              </div>
-            )}
-
-            {(viewRelated.dispatches.length > 0 || viewRelated.payments.length > 0) && (
-              <div className="border-t border-neutral-100 pt-4">
-                <p className="text-sm font-semibold text-neutral-700 mb-3">Related Records</p>
-                <div className="grid grid-cols-2 gap-4">
-                  {viewRelated.dispatches.length > 0 && (
-                    <div>
-                      <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-2">Dispatch Entries</p>
-                      <div className="space-y-1">
-                        {viewRelated.dispatches.map((d, i) => (
-                          <div key={i} className="flex items-center justify-between px-2 py-1.5 bg-neutral-50 rounded-lg">
-                            <span className="text-xs font-medium text-neutral-700">{d.dispatch_number}</span>
-                            <StatusBadge status={d.status} />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {viewRelated.payments.length > 0 && (
-                    <div>
-                      <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-2">Payments Recorded</p>
-                      <div className="space-y-1">
-                        {viewRelated.payments.map((p, i) => (
-                          <div key={i} className="flex items-center justify-between px-2 py-1.5 bg-success-50 rounded-lg">
-                            <div>
-                              <span className="text-xs font-semibold text-success-700">{formatCurrency(p.amount)}</span>
-                              <span className="text-[10px] text-neutral-400 ml-1.5">{p.payment_mode}</span>
-                            </div>
-                            <span className="text-[10px] text-neutral-500">{formatDate(p.payment_date)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+            <InvoicePrint
+              invoice={{ ...selectedInvoice, items: viewItems.map(i => ({ ...i, id: '', invoice_id: selectedInvoice.id, quantity: parseFloat(i.quantity) || 0, unit_price: parseFloat(i.unit_price) || 0, discount_pct: parseFloat(i.discount_pct) || 0, tax_pct: parseFloat(i.tax_pct) || 0 })) }}
+              companyOverride={printCompany}
+              printMode="normal"
+            />
           </div>
         )}
       </Modal>
