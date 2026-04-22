@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/ui/Modal';
 import EmptyState from '../components/ui/EmptyState';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import type { Product, StockMovement, Godown } from '../types';
+import type { Product, ProductUnit, StockMovement, Godown } from '../types';
 import { fetchCompanies } from '../lib/companiesService';
 import type { Company } from '../lib/companiesService';
 import { processStockMovement } from '../services/stockService';
@@ -39,6 +39,7 @@ export default function Inventory() {
   const [showLedgerModal, setShowLedgerModal] = useState(false);
   const [ledgerProduct, setLedgerProduct] = useState<Product | null>(null);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
+  const [productUnitsMap, setProductUnitsMap] = useState<Record<string, ProductUnit[]>>({});
 
   const [form, setForm] = useState({
     name: '', category: 'Astro Products' as Product['category'], unit: 'pcs',
@@ -49,7 +50,7 @@ export default function Inventory() {
     low_stock_enabled: true,
     company_id: '',
   });
-  const [stockForm, setStockForm] = useState({ type: 'adjustment', quantity: '', notes: '', movement_label: 'adjustment', godown_id: '' });
+  const [stockForm, setStockForm] = useState({ type: 'adjustment', quantity: '', notes: '', movement_label: 'adjustment', godown_id: '', piece_weights: '' });
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string>('');
 
@@ -73,10 +74,11 @@ export default function Inventory() {
 
   const loadData = async () => {
     setLoading(true);
-    const [productsRes, godownsRes, godownStockRes] = await Promise.all([
+    const [productsRes, godownsRes, godownStockRes, unitsRes] = await Promise.all([
       supabase.from('products').select('*').eq('is_active', true).order('created_at', { ascending: false }),
       supabase.from('godowns').select('*').eq('is_active', true).order('name'),
       supabase.from('godown_stock').select('product_id, quantity'),
+      supabase.from('product_units').select('*').order('created_at', { ascending: false }),
     ]);
     const rawProducts = productsRes.data || [];
     const stockRows = godownStockRes.data || [];
@@ -84,11 +86,20 @@ export default function Inventory() {
     for (const row of stockRows) {
       stockTotals[row.product_id] = (stockTotals[row.product_id] || 0) + (row.quantity || 0);
     }
-    const merged = rawProducts.map(p => ({
-      ...p,
-      stock_quantity: stockTotals[p.id] ?? p.stock_quantity,
-    }));
+    const byProduct: Record<string, ProductUnit[]> = {};
+    for (const unit of ((unitsRes.data || []) as ProductUnit[])) {
+      byProduct[unit.product_id] = byProduct[unit.product_id] || [];
+      byProduct[unit.product_id].push(unit);
+    }
+    const merged = rawProducts.map(p => {
+      if (p.is_gemstone) {
+        const inStockCount = (byProduct[p.id] || []).filter(u => u.status === 'in_stock').length;
+        return { ...p, stock_quantity: inStockCount };
+      }
+      return { ...p, stock_quantity: stockTotals[p.id] ?? p.stock_quantity };
+    });
     setProducts(merged);
+    setProductUnitsMap(byProduct);
     setGodowns(godownsRes.data || []);
     setLoading(false);
   };
@@ -259,7 +270,7 @@ export default function Inventory() {
 
   const openStockModal = (p: Product) => {
     setSelectedProduct(p);
-    setStockForm({ type: 'in', quantity: '', notes: '', movement_label: 'in', godown_id: godowns[0]?.id || '' });
+    setStockForm({ type: 'in', quantity: '', notes: '', movement_label: 'in', godown_id: godowns[0]?.id || '', piece_weights: '' });
     setShowStockModal(true);
   };
 
@@ -275,11 +286,75 @@ export default function Inventory() {
     const qty = parseFloat(stockForm.quantity) || 0;
     const mvType = stockForm.movement_label;
     const godownId = stockForm.godown_id;
-    if (!godownId || qty <= 0) return;
+    if (!godownId) return;
 
     const isIn = ['purchase', 'return'].includes(mvType);
 
     try {
+      if (selectedProduct.is_gemstone) {
+        const parsedWeights = stockForm.piece_weights
+          .split('\n')
+          .map(w => Number(w.trim()))
+          .filter(w => Number.isFinite(w) && w > 0);
+
+        if (['purchase', 'return'].includes(mvType)) {
+          if (parsedWeights.length === 0) {
+            alert('Please enter one weight per line for gemstone pieces.');
+            return;
+          }
+          const weightUnit: 'kg' | 'g' | 'carat' =
+            selectedProduct.unit === 'kg' ? 'kg' : selectedProduct.unit === 'carat' ? 'carat' : 'g';
+          const rows = parsedWeights.map(weight => ({
+            product_id: selectedProduct.id,
+            weight,
+            weight_unit: weightUnit,
+            status: 'in_stock' as const,
+            godown_id: godownId,
+          }));
+          const { error: insErr } = await supabase.from('product_units').insert(rows);
+          if (insErr) throw insErr;
+          await processStockMovement({
+            type: mvType === 'purchase' ? 'purchase' : 'return',
+            items: [{ product_id: selectedProduct.id, godown_id: godownId, quantity: parsedWeights.length }],
+            reference_type: 'manual_stock_update',
+            notes: stockForm.notes,
+          });
+        } else if (mvType === 'sale') {
+          if (qty <= 0 || !Number.isInteger(qty)) {
+            alert('For gemstone sale, quantity must be whole piece count.');
+            return;
+          }
+          const available = (productUnitsMap[selectedProduct.id] || []).filter(u => u.status === 'in_stock' && (!u.godown_id || u.godown_id === godownId));
+          if (available.length < qty) {
+            alert(`Only ${available.length} piece(s) available in selected godown.`);
+            return;
+          }
+          const toSell = available.slice(0, qty).map(u => u.id);
+          const { error: upErr } = await supabase.from('product_units').update({
+            status: 'sold',
+            sold_at: new Date().toISOString(),
+            sold_reference_type: 'manual_stock_update',
+          }).in('id', toSell);
+          if (upErr) throw upErr;
+          await processStockMovement({
+            type: 'dispatch',
+            items: [{ product_id: selectedProduct.id, godown_id: godownId, quantity: qty }],
+            reference_type: 'manual_stock_update',
+            notes: stockForm.notes,
+          });
+        } else {
+          alert('Use Purchase/Return/Sale for gemstone piece tracking.');
+          return;
+        }
+
+        await loadData();
+        setShowStockModal(false);
+        setSelectedProduct(null);
+        return;
+      }
+
+      if (qty <= 0) return;
+
       if (mvType === 'adjustment') {
         const { data: row } = await supabase
           .from('godown_stock')
@@ -616,12 +691,8 @@ export default function Inventory() {
                 </select>
               </div>
               <div>
-                <label className="label">Total Weight</label>
-                <input type="number" step="0.01" value={form.total_weight} onChange={e => setForm(f => ({ ...f, total_weight: e.target.value }))} className="input text-xs" placeholder="0" />
-              </div>
-              <div>
-                <label className="label">Weight/piece</label>
-                <input type="number" step="0.01" value={form.weight_grams} onChange={e => setForm(f => ({ ...f, weight_grams: e.target.value }))} className="input text-xs" placeholder="0" />
+                <label className="label">Piece tracking</label>
+                <div className="input text-xs bg-neutral-50 text-neutral-500">Tracked from stock entry weights</div>
               </div>
             </div>
           )}
@@ -716,10 +787,17 @@ export default function Inventory() {
               ))}
             </div>
           </div>
-          <div>
-            <label className="label">Quantity</label>
-            <input type="number" step={selectedProduct?.is_gemstone ? '0.01' : '1'} min={0} value={stockForm.quantity} onChange={e => setStockForm(f => ({ ...f, quantity: e.target.value }))} className="input" placeholder="0" />
-          </div>
+          {selectedProduct?.is_gemstone && ['purchase', 'return'].includes(stockForm.movement_label) ? (
+            <div>
+              <label className="label">Add Pieces (one weight per line)</label>
+              <textarea value={stockForm.piece_weights} onChange={e => setStockForm(f => ({ ...f, piece_weights: e.target.value }))} className="input h-24 text-xs resize-none" placeholder={'2.3\n2.4\n1.2'} />
+            </div>
+          ) : (
+            <div>
+              <label className="label">Quantity</label>
+              <input type="number" step={selectedProduct?.is_gemstone ? '1' : '1'} min={0} value={stockForm.quantity} onChange={e => setStockForm(f => ({ ...f, quantity: e.target.value }))} className="input" placeholder="0" />
+            </div>
+          )}
           <div>
             <label className="label">Notes / Reference</label>
             <input value={stockForm.notes} onChange={e => setStockForm(f => ({ ...f, notes: e.target.value }))} className="input" placeholder="Invoice #, supplier name, reason..." />
@@ -857,7 +935,7 @@ export default function Inventory() {
                   <p className="text-[9px] font-bold uppercase tracking-wider text-neutral-400 mb-1">Low Stock Alert</p>
                   <p className="text-xs font-semibold text-neutral-700">{viewProduct.low_stock_alert}</p>
                 </div>
-                <div className={`rounded-lg p-3 ${viewProduct.is_active ? 'bg-success-50' : 'bg-neutral-100'}`}>
+              <div className={`rounded-lg p-3 ${viewProduct.is_active ? 'bg-success-50' : 'bg-neutral-100'}`}>
                   <p className="text-[9px] font-bold uppercase tracking-wider text-neutral-400 mb-1">Status</p>
                   <p className={`text-xs font-bold ${viewProduct.is_active ? 'text-success-700' : 'text-neutral-500'}`}>{viewProduct.is_active ? 'Active' : 'Inactive'}</p>
                 </div>
@@ -871,6 +949,21 @@ export default function Inventory() {
                   <History className="w-3 h-3" /> View Movements
                 </button>
               </div>
+              {viewProduct.is_gemstone && (
+                <div className="col-span-3 bg-neutral-50 rounded-lg p-3">
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-neutral-400 mb-1">Available Pieces</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(productUnitsMap[viewProduct.id] || []).filter(u => u.status === 'in_stock').map(u => (
+                      <span key={u.id} className="px-2 py-0.5 rounded-full bg-primary-50 text-primary-700 text-[10px] font-semibold">
+                        {u.weight} {u.weight_unit}
+                      </span>
+                    ))}
+                    {(productUnitsMap[viewProduct.id] || []).filter(u => u.status === 'in_stock').length === 0 && (
+                      <span className="text-xs text-neutral-400">No in-stock pieces</span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
